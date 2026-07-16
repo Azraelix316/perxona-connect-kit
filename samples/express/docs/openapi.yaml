@@ -255,6 +255,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/assets/vrm/upload:
+    post:
+      tags:
+        - connect
+        - connect
+      summary: Upload a VRM file and register it as an avatar
+      description: >-
+        Accepts a VRM file, converts it to a Cocos-compatible bundle, uploads the bundle to S3, and registers the result
+        as a new active avatar asset in the caller's organization. This call blocks until conversion and upload
+        complete.
+
+
+        ## Rate Limit 
+
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: post_v1_connect_upload_vrm
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_upload_vrm_api_v1_connect_assets_vrm_upload_post'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectVRMUploadResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - HTTPBearer: []
   /api/v1/connect/voices:
     get:
       tags:
@@ -421,6 +458,194 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
       security:
         - HTTPBearer: []
+  /api/v1/connect/chatbots:
+    get:
+      tags:
+        - connect
+        - connect
+      summary: List chat bots
+      description: List all non-deleted chat bots (including disabled ones) for the caller's organization as lightweight summaries.
+      operationId: get_v1_connect_list_chat_bots
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ChatBotSummaryResponse'
+                type: array
+                title: Response List Chat Bots Api V1 Connect Chatbots Get
+      security:
+        - HTTPBearer: []
+    post:
+      tags:
+        - connect
+        - connect
+      summary: Create a chat bot
+      description: >-
+        Create a new Connect chat bot, optionally seeding its knowledge file and tools. Knowledge file upload and tool
+        creation are best-effort: their failure does not roll back the created chat bot.
+
+
+        ## Rate Limit 
+
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: post_v1_connect_create_chat_bot
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_create_chat_bot_api_v1_connect_chatbots_post'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatBotDetailResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - HTTPBearer: []
+  /api/v1/connect/chatbots/{chat_bot_id}:
+    get:
+      tags:
+        - connect
+        - connect
+      summary: Get chat bot detail
+      description: Get full detail for a single chat bot, including its knowledge status and tools.
+      operationId: get_v1_connect_get_chat_bot
+      security:
+        - HTTPBearer: []
+      parameters:
+        - name: chat_bot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Chat Bot Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatBotDetailResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+        - connect
+        - connect
+      summary: Update a chat bot
+      description: >-
+        Partially update a chat bot's fields, knowledge file, and/or tools. Only fields actually provided are changed.
+        knowledge_file and remove_knowledge are mutually exclusive. Omit tools to leave the tool set unchanged; pass an
+        empty array to clear it. Knowledge operations commit independently, so they remain applied if a subsequent tool
+        or field update fails.
+
+
+        ## Rate Limit 
+
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: patch_v1_connect_update_chat_bot
+      security:
+        - HTTPBearer: []
+      parameters:
+        - name: chat_bot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Chat Bot Id
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_update_chat_bot_api_v1_connect_chatbots__chat_bot_id__patch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatBotDetailResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+        - connect
+        - connect
+      summary: Delete a chat bot
+      description: Soft-delete a chat bot and clean up its knowledge/tool bindings.
+      operationId: delete_v1_connect_delete_chat_bot
+      security:
+        - HTTPBearer: []
+      parameters:
+        - name: chat_bot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Chat Bot Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/chatbots/{chat_bot_id}/chat:
+    post:
+      tags:
+        - connect
+        - connect
+      summary: Send a message to a chat bot
+      operationId: post_v1_connect_chat_with_chat_bot
+      security:
+        - HTTPBearer: []
+      parameters:
+        - name: chat_bot_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Chat Bot Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectChatBotChatRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectChatBotChatResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     AssetLOD:
@@ -491,6 +716,129 @@ components:
         - loading
       title: AvatarThumbnailType
       description: The type of thumbnail for the asset
+    Body_create_chat_bot_api_v1_connect_chatbots_post:
+      properties:
+        name:
+          type: string
+          title: Name
+        custom_instructions:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Custom Instructions
+        knowledge_file:
+          anyOf:
+            - type: string
+              format: binary
+            - type: 'null'
+          title: Knowledge File
+        tools:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Tools
+      type: object
+      required:
+        - name
+      title: Body_create_chat_bot_api_v1_connect_chatbots_post
+    Body_update_chat_bot_api_v1_connect_chatbots__chat_bot_id__patch:
+      properties:
+        name:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Name
+        custom_instructions:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Custom Instructions
+        chat_bot_status:
+          anyOf:
+            - $ref: '#/components/schemas/ConnectChatBotStatus'
+            - type: 'null'
+        knowledge_file:
+          anyOf:
+            - type: string
+              format: binary
+            - type: 'null'
+          title: Knowledge File
+        remove_knowledge:
+          type: boolean
+          title: Remove Knowledge
+          default: false
+        tools:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Tools
+      type: object
+      title: Body_update_chat_bot_api_v1_connect_chatbots__chat_bot_id__patch
+    Body_upload_vrm_api_v1_connect_assets_vrm_upload_post:
+      properties:
+        vrm_file:
+          type: string
+          format: binary
+          title: Vrm File
+        avatar_name:
+          anyOf:
+            - type: string
+              maxLength: 256
+            - type: 'null'
+          title: Avatar Name
+          description: Display name for the new avatar. Defaults to the VRM filename if omitted.
+      type: object
+      required:
+        - vrm_file
+      title: Body_upload_vrm_api_v1_connect_assets_vrm_upload_post
+    ChatBotDetailResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        custom_instructions:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Custom Instructions
+        status:
+          $ref: '#/components/schemas/ConnectChatBotStatus'
+        knowledge:
+          anyOf:
+            - $ref: '#/components/schemas/ConnectChatBotKnowledgeFileDO'
+            - type: 'null'
+        tools:
+          items:
+            $ref: '#/components/schemas/ConnectChatBotToolDO'
+          type: array
+          title: Tools
+      type: object
+      required:
+        - id
+        - name
+        - status
+      title: ChatBotDetailResponse
+      description: Full chat bot detail, including its bound knowledge file and tools.
+    ChatBotSummaryResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        status:
+          $ref: '#/components/schemas/ConnectChatBotStatus'
+      type: object
+      required:
+        - id
+        - name
+        - status
+      title: ChatBotSummaryResponse
+      description: Lightweight chat bot summary, used for the list endpoint.
     ConnectAvatarDetailResponse:
       properties:
         avatar_id:
@@ -540,6 +888,241 @@ components:
         - lod_urls
         - lipsync_configs
       title: ConnectAvatarDetailResponse
+    ConnectChatBotChatRequest:
+      properties:
+        messages:
+          $ref: '#/components/schemas/ConnectChatBotMessages'
+      type: object
+      required:
+        - messages
+      title: ConnectChatBotChatRequest
+      description: Validated HTTP body for a stateless Connect chat request.
+    ConnectChatBotChatResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        status:
+          $ref: '#/components/schemas/ConnectChatBotInteractionStatus'
+        reply_text:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Reply Text
+      type: object
+      required:
+        - id
+        - status
+      title: ConnectChatBotChatResponse
+    ConnectChatBotInteractionStatus:
+      type: string
+      enum:
+        - pending
+        - succeeded
+        - failed
+      title: ConnectChatBotInteractionStatus
+    ConnectChatBotKnowledgeFileDO:
+      properties:
+        chat_bot_id:
+          type: string
+          title: Chat Bot Id
+        file_id:
+          type: string
+          title: File Id
+        status:
+          $ref: '#/components/schemas/ConnectKnowledgeFileStatus'
+      type: object
+      required:
+        - chat_bot_id
+        - file_id
+        - status
+      title: ConnectChatBotKnowledgeFileDO
+      description: Domain object describing a chat bot's bound knowledge file.
+    ConnectChatBotMessage:
+      properties:
+        role:
+          $ref: '#/components/schemas/ConnectChatBotMessageRole'
+        parts:
+          items:
+            $ref: '#/components/schemas/ConnectChatBotMessagePart'
+          type: array
+          minItems: 1
+          title: Parts
+      type: object
+      required:
+        - role
+        - parts
+      title: ConnectChatBotMessage
+    ConnectChatBotMessagePart:
+      properties:
+        type:
+          $ref: '#/components/schemas/ConnectChatBotMessagePartType'
+          default: text
+        text:
+          type: string
+          maxLength: 8000
+          title: Text
+      type: object
+      required:
+        - text
+      title: ConnectChatBotMessagePart
+    ConnectChatBotMessagePartType:
+      type: string
+      enum:
+        - text
+      title: ConnectChatBotMessagePartType
+    ConnectChatBotMessageRole:
+      type: string
+      enum:
+        - user
+        - assistant
+      title: ConnectChatBotMessageRole
+    ConnectChatBotMessages:
+      items:
+        $ref: '#/components/schemas/ConnectChatBotMessage'
+      type: array
+      minItems: 1
+      title: ConnectChatBotMessages
+    ConnectChatBotStatus:
+      type: string
+      enum:
+        - active
+        - disabled
+      title: ConnectChatBotStatus
+    ConnectChatBotToolAPIKeyAuthDO:
+      properties:
+        secret_type:
+          type: string
+          const: api_key
+          title: Secret Type
+          default: api_key
+        api_key_header:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Api Key Header
+        api_key_value:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Api Key Value
+      type: object
+      title: ConnectChatBotToolAPIKeyAuthDO
+      description: Masked API key authentication configuration returned for a tool.
+    ConnectChatBotToolBearerTokenAuthDO:
+      properties:
+        secret_type:
+          type: string
+          const: bearer_token
+          title: Secret Type
+          default: bearer_token
+        bearer_token:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Bearer Token
+      type: object
+      title: ConnectChatBotToolBearerTokenAuthDO
+      description: Masked bearer token authentication configuration returned for a tool.
+    ConnectChatBotToolDO:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Description
+        settings:
+          $ref: '#/components/schemas/ConnectChatBotToolSettingsDO'
+      type: object
+      required:
+        - id
+        - name
+        - settings
+      title: ConnectChatBotToolDO
+    ConnectChatBotToolNoAuthDO:
+      properties:
+        secret_type:
+          type: string
+          const: no_auth
+          title: Secret Type
+          default: no_auth
+      type: object
+      title: ConnectChatBotToolNoAuthDO
+      description: Authentication configuration for a tool that requires no credentials.
+    ConnectChatBotToolRequestDO:
+      properties:
+        method:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Method
+        url:
+          type: string
+          title: Url
+          default: ''
+        headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Headers
+        query_params:
+          additionalProperties: true
+          type: object
+          title: Query Params
+        body:
+          additionalProperties: true
+          type: object
+          title: Body
+      type: object
+      title: ConnectChatBotToolRequestDO
+      description: HTTP request configuration returned for a Connect-managed tool.
+    ConnectChatBotToolResponseDO:
+      properties:
+        body_schema:
+          additionalProperties: true
+          type: object
+          title: Body Schema
+      type: object
+      title: ConnectChatBotToolResponseDO
+      description: Response schema returned for a Connect-managed tool.
+    ConnectChatBotToolSettingsDO:
+      properties:
+        request:
+          $ref: '#/components/schemas/ConnectChatBotToolRequestDO'
+        auth:
+          oneOf:
+            - $ref: '#/components/schemas/ConnectChatBotToolNoAuthDO'
+            - $ref: '#/components/schemas/ConnectChatBotToolAPIKeyAuthDO'
+            - $ref: '#/components/schemas/ConnectChatBotToolBearerTokenAuthDO'
+          title: Auth
+          discriminator:
+            propertyName: secret_type
+            mapping:
+              api_key: '#/components/schemas/ConnectChatBotToolAPIKeyAuthDO'
+              bearer_token: '#/components/schemas/ConnectChatBotToolBearerTokenAuthDO'
+              no_auth: '#/components/schemas/ConnectChatBotToolNoAuthDO'
+        response:
+          $ref: '#/components/schemas/ConnectChatBotToolResponseDO'
+      type: object
+      required:
+        - request
+        - response
+      title: ConnectChatBotToolSettingsDO
+      description: HTTP API specification returned for a Connect-managed tool.
+    ConnectKnowledgeFileStatus:
+      type: string
+      enum:
+        - processing
+        - ready
+        - error
+      title: ConnectKnowledgeFileStatus
+      description: The external-facing knowledge file status exposed to Connect clients.
     ConnectListAvatarResponse:
       properties:
         avatar_id:
@@ -819,6 +1402,22 @@ components:
         - region
         - token
       title: ConnectVoiceTextToSpeechTokenResponse
+    ConnectVRMUploadResponse:
+      properties:
+        avatar_id:
+          type: string
+          title: Avatar Id
+      type: object
+      required:
+        - avatar_id
+      title: ConnectVRMUploadResponse
+      description: |-
+        Result of a successful VRM upload: the registered avatar's asset ID.
+
+        Only `avatar_id` is returned, matching the existing Connect API convention
+        (``ConnectListAvatarResponse``/``ConnectAvatarDetailResponse``) of never
+        exposing internal revision IDs to Connect clients. Callers should follow up
+        with ``GET /assets/avatars/{avatar_id}`` for full detail (e.g. lod_urls).
     DateRangeStrEnum:
       type: string
       enum:

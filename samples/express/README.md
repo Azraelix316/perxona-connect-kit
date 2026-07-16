@@ -25,8 +25,6 @@ npm run dev              # open the URL it prints (default http://localhost:8088
 Pick an avatar / scene / voice, click **Launch** — the avatar speaks. The server signs in with its own credentials on the first
 request; there's no login screen.
 
-**No credentials yet?** Set `USE_MOCK=true` in `.env` and you get the full clickable flow with fake data.
-
 ---
 
 ## Contents
@@ -45,38 +43,43 @@ request; there's no login screen.
 
 ## 1. Purpose
 
-`server.mjs` is a thin Express backend that proxies the Perxona Connect API and keeps the bearer token server-side. `public/` is
-a zero-dependency vanilla-JS frontend that drives the `<sv-presenter>` avatar Web Component loaded from Perxona's CDN. Together
-they demonstrate the happy path end to end:
+`server.mjs` is a thin Express backend that authenticates with the Connect API and hands the browser a short-lived bearer token.
+`public/` is a zero-dependency vanilla-JS frontend that drives the `<sv-presenter>` avatar Web Component loaded from Perxona's
+CDN — the component talks to the Connect API directly using that token. Together they demonstrate the happy path end to end:
 
 1. The server authenticates with its own Connect credentials (`.env`) — no browser login.
-2. Load the catalog (avatars, scenes, voices).
-3. Initialize the presenter with one combined config call.
-4. Make the avatar speak — both from the browser and via the backend.
+2. Load the catalog (avatars, scenes, voices) through the server's proxy.
+3. Fetch a Connect token and initialize the presenter with it plus the picked avatar/scene/voice — the presenter resolves the
+   rest directly against the Connect API.
+4. Make the avatar speak — one call, the presenter handles synthesis and motion playback.
 
 ```text
 .
-├── server.mjs        # Express backend — proxies the Connect API, keeps your token server-side
+├── server.mjs        # Express backend — proxies catalog reads and mints the Connect bearer token
 ├── public/
 │   ├── index.html    # Landing page listing demos
 │   └── demos/basic/  # This demo's UI — index.html, style.css, app.js (plain ESM, no build step)
-└── docs/             # Reference — openapi.yaml + presenter-config.schema.json + presenter.d.ts
+└── docs/             # Reference — openapi.yaml + presenter.d.ts
 ```
 
-`docs/` is reference material for your IDE: `openapi.yaml` describes the Connect API, and `presenter-config.schema.json` /
-`presenter.d.ts` describe the presenter contract (point your editor at `presenter.d.ts` for autocomplete and JSDoc on presenter
+`docs/` is reference material for your IDE: `openapi.yaml` describes the Connect API, and
+`presenter.d.ts` describes the presenter contract (point your editor at `presenter.d.ts` for autocomplete and JSDoc on presenter
 methods).
 
 ### Auth model
 
 This sample uses **one set of server-side Connect credentials** (`PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD` in `.env`)
 for every visitor — there is no per-user login. The server logs in lazily on the first protected request, caches the bearer
-token in memory, and reuses it for every subsequent call.
+token in memory, and reuses it for every subsequent call. `GET /api/connect-token` validates the cached bearer before handing
+it to the browser, which passes it straight into `presenter.initialize(connectToken, target)` — from that point on,
+`<sv-presenter>` talks to the Connect API directly for avatar/scene resolution, speech synthesis, and token refresh.
 
-If the upstream API rejects the cached token (`401`/`403`) — for example because it expired — the server transparently logs in
-again and retries the request once. The browser never sees the failure and never needs to re-authenticate. This convenience
-model is meant for demos and hackathons: every browser hitting this server shares one upstream identity, which is not a
-multi-tenant, production-grade auth design.
+If the upstream API rejects the cached token (`401`/`403`) during a server-proxied call or connect-token validation — for
+example because it expired — the server transparently logs in again and retries once. This convenience model is meant for demos
+and hackathons: every browser hitting this server shares one upstream identity, which is not a multi-tenant, production-grade
+auth design. Note also that once a `connect_token` reaches the browser, it is a real bearer credential for the shared identity
+for its lifetime — wiring `refreshConnectToken`/`CONNECT_TOKEN_EXPIRED` for long sessions is a known gap (see
+[Known limitations](#6-known-limitations)).
 
 ---
 
@@ -88,7 +91,8 @@ multi-tenant, production-grade auth design.
   too old, `npm install` refuses to run and `npm run dev`/`npm start` fail with a message telling you what to upgrade to.
 - **Perxona service account credentials** (email + password) with access to the Connect API — ask your Perxona contact. The same
   person provides the region-specific API base URL. The server uses these credentials directly — there is no browser sign-in.
-- The credentials need permission to read avatars, scenes, and voices, and to mint TTS tokens.
+- The credentials need permission to read avatars, scenes, and voices, and to mint TTS tokens and presentations \u2014 the browser
+  calls all of those directly against the Connect API once it has the `connect_token` (see ["Auth model"](#auth-model)).
 
 ### Steps
 
@@ -106,7 +110,6 @@ Then open `.env` and fill in the values:
 | `PERXONA_CONNECT_PASSWORD` | ✅       | Perxona service account password.                                                                                                                                                               |
 | `PORT`                     | —        | Port the app serves on (default `8088`).                                                                                                                                                        |
 | `PRESENTER_URL`            | —        | URL of the Perxona presenter engine on the CDN. Defaults to the production engine. Override only if your Perxona contact provides a specific URL.                                               |
-| `USE_MOCK`                 | —        | Set `true` to return documented response shapes without calling the real API — useful for UI work before you have credentials.                                                                  |
 | `LLM_API_KEY`              | —        | Set (with optional `LLM_BASE_URL`, `LLM_MODEL`) to enable the chat panel. Any OpenAI-compatible endpoint works, including a local Ollama via `LLM_BASE_URL`. Leave blank to keep chat disabled. |
 
 The server **exits at startup** if `PERXONA_API_BASE_URL`, `PERXONA_CONNECT_EMAIL`, or `PERXONA_CONNECT_PASSWORD` is missing. If
@@ -125,14 +128,16 @@ npm start       # start without watch
 ```
 
 The terminal prints the local URL (e.g. `http://localhost:8088`), the API it targets, and whether it's in live or mock mode.
-Open that URL, choose an avatar / scene / voice, and click **Launch** — the avatar appears and is ready to speak.
+In live mode, open that URL, choose an avatar / scene / voice, and click **Launch** — the avatar appears and is ready to speak.
+Mock mode supports catalog browsing only.
 
 ---
 
 ## 4. API & SDK integration
 
-The backend exposes a small proxy API; the frontend calls it and drives the presenter SDK. The Connect bearer token lives only
-in server memory and **never reaches the browser** — see ["Auth model"](#1-purpose) above.
+The backend exposes a small proxy API for catalog reads plus one endpoint that mints the Connect bearer token; the frontend
+calls it and drives the presenter SDK. See ["Auth model"](#auth-model) above for how the token flows from server to browser to
+the Connect API.
 
 ### Backend API routes
 
@@ -140,12 +145,10 @@ in server memory and **never reaches the browser** — see ["Auth model"](#1-pur
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `GET /api/health`                                                    | Liveness + diagnostics (`upstream` reachability; reads `mock` in mock mode). Probes the backend on each call. |
 | `GET /api/config`                                                    | Static per-process flags (`mock`, `chat` availability, `presenterUrl`). No upstream probe.                    |
-| `POST /api/tts-token`                                                | Mint a speech token for a voice (`{ voice_id }`, optional).                                                   |
+| `GET /api/connect-token`                                             | Mint/reuse the shared Connect bearer JWT — pass straight into `presenter.initialize()`.                       |
 | `GET /api/voices`                                                    | List voices.                                                                                                  |
 | `GET /api/avatars` · `/api/avatars/:id` · `/api/avatars/:id/motions` | List / detail / motions.                                                                                      |
 | `GET /api/scenes` · `/api/scenes/:id`                                | List / detail.                                                                                                |
-| `GET /api/profile?avatar=&scene=`                                    | **One call** returning the assembled `AvatarConfig` + `SceneConfig` the presenter needs.                      |
-| `POST /api/presentation`                                             | Turn text into a presenter-ready `Performance` payload.                                                       |
 | `POST /api/chat`                                                     | Opt-in LLM chat. Returns `501` until `LLM_API_KEY` is set.                                                    |
 
 ### SDK: the `<sv-presenter>` Web Component
@@ -159,90 +162,79 @@ The presenter is loaded from Perxona's CDN. `app.js` fetches `GET /api/config` o
 
 `app.js` drives it through its JS API. The members used by this sample:
 
-| Member                                                                  | Role                                                                                 |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `presenter.initialize(avatar, scene, speechToken)`                      | Boot the presenter with config + a TTS token.                                        |
-| `presenter.resumeAudioPlayback()`                                       | Unlock browser autoplay. **Must run from a direct user gesture** (the Launch click). |
-| `presenter.playPerformance(performance, { strategy: 'enqueueToPlay' })` | Queue and play a performance.                                                        |
-| `presenter.interruptPerformance()`                                      | Stop the current performance and clear the queue.                                    |
-| `presenter.refreshSpeechToken(token)`                                   | Swap in a fresh speech token.                                                        |
-| event `PRESENTER_STATUS`                                                | `Uninitialized` → `Initializing` → `Ready`.                                          |
-| event `SPEECH_TOKEN_EXPIRED`                                            | Fired when the speech token expires — refresh it.                                    |
+| Member                                       | Role                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `presenter.initialize(connectToken, target)` | Boot the presenter: resolves `target` and mints its own speech token against the Connect API. |
+| `presenter.resumeAudioPlayback()`            | Unlock browser autoplay. **Must run from a direct user gesture** (the Launch click).          |
+| `presenter.present(content)`                 | Synthesize `content` into speech and play it back on the avatar.                              |
+| `presenter.interruptPresentation()`          | Stop the current performance and clear the queue.                                             |
+| event `PRESENTER_STATUS`                     | `Uninitialized` → `Initializing` → `Ready`.                                                   |
 
 ### Initialization (the basic flow)
 
 ```js
 // 1. Unlock audio from the user's Launch click (autoplay policy).
-presenter.resumeAudioPlayback();
+await presenter.resumeAudioPlayback();
 
-// 2. Fetch the combined config and a speech token in parallel.
-const [{ avatar, scene }, { speech_token }] = await Promise.all([
-  api(`/api/profile?avatar=${avatarId}&scene=${sceneId}`),
-  api("/api/tts-token", {
-    method: "POST",
-    body: { voice_id: selectedVoiceId },
-  }),
-]);
+// 2. Fetch the Connect bearer token this server minted.
+const { connect_token } = await api("/api/connect-token");
 
-// 3. Initialize — the presenter emits PRESENTER_STATUS as it becomes Ready.
-presenter.initialize(avatar, scene, speech_token);
+// 3. Initialize — the presenter resolves avatarId/sceneId/voiceId against the
+//    Connect API itself and emits PRESENTER_STATUS as it becomes Ready.
+await presenter.initialize(connect_token, {
+  type: "explicit",
+  avatarId,
+  sceneId,
+  voiceId, // optional — omit to use presentWithAudio() instead of present()
+});
 ```
 
 Once `PRESENTER_STATUS` reports `Ready`, make the avatar speak:
 
 ```js
-presenter.playPerformance(performance, { strategy: "enqueueToPlay" });
+const result = await presenter.present("Hello!");
 ```
 
-This sample builds that `performance` through a single path with a fallback:
-
-- **Backend-built** — every entry point (preset buttons, text box, and chat) calls `POST /api/presentation`, where a real app
-  adds SSML, motion timing, and voice selection.
-- **Client-built fallback** — if that request fails, the app assembles a TTS-only `Performance` in the browser, so you can see
-  the presenter contract up close and the avatar still speaks.
+`present()` builds the speech + motion performance internally via the Connect API, using the avatar/voice resolved by
+`initialize()` — there is no client-built fallback anymore (see [Known limitations](#6-known-limitations)).
 
 ### Error handling
 
 The sample handles the common failure paths so you can see the patterns:
 
 - **API errors** — the `api()` fetch wrapper throws on any non-2xx response with `status` and `data` attached, so callers can
-  branch on the HTTP status. Catalog and presentation failures show a status message.
-- **Expired Connect bearer token** — the server detects a `401`/`403` from upstream, logs in again with
-  `PERXONA_CONNECT_EMAIL`/`PERXONA_CONNECT_PASSWORD`, and retries the request once. This is transparent to the browser; there's
-  no re-login UI. If credentials are actually invalid, the browser sees a `401`/`403` and the status message tells you to check
-  the server's `.env`.
-- **Presentation endpoint failure** — if `POST /api/presentation` fails for a non-auth reason (error status or network failure),
-  the app automatically **falls back** to a client-built, TTS-only performance (line only, no motions) so the avatar still
-  speaks. Auth/setup failures are surfaced instead of silently falling back.
-- **Expired speech token** — on `SPEECH_TOKEN_EXPIRED`, the app mints a new token for the _same_ voice and calls
-  `presenter.refreshSpeechToken()`, so long sessions keep working.
+  branch on the HTTP status. Catalog and connect-token failures show a status message.
+- **Expired Connect bearer token (server-proxied catalog calls)** — the server detects a `401`/`403` from upstream, logs in
+  again with `PERXONA_CONNECT_EMAIL`/`PERXONA_CONNECT_PASSWORD`, and retries the request once. This is transparent to the
+  browser; there's no re-login UI. If credentials are actually invalid, the browser sees a `401`/`403` and the status message
+  tells you to check the server's `.env`.
+- **`initialize()`/`present()` failures** — `initialize()` rejects if the Connect API call to resolve the target fails (e.g.
+  unknown avatar/scene id); the click handler catches it and shows a status message. `present()` never rejects — it resolves
+  with a `PresentationResult` whose `success` is `false` and `code`/`message` explain why (e.g. no target resolved yet).
 
 ### Contracts
 
 This README keeps shapes short on purpose. When you need exact fields, go to the source of truth:
 
-| What                                                                | Where                                                                                                                     |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Presenter config & `Performance` types                              | [`docs/presenter.d.ts`](docs/presenter.d.ts) (+ [`docs/presenter-config.schema.json`](docs/presenter-config.schema.json)) |
-| Perxona Connect API (the service the proxy calls)                   | [`docs/openapi.yaml`](docs/openapi.yaml)                                                                                  |
-| Local `/api/*` proxy (request body · response shape · status codes) | the route handlers in [`server.mjs`](server.mjs)                                                                          |
+| What                                                                                                | Where                                            |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Presenter contract (`IPresentationWidget`, `PresentationTarget`, `PresentationResult`, event types) | [`docs/presenter.d.ts`](docs/presenter.d.ts)     |
+| Perxona Connect API (the service the presenter and this proxy call)                                 | [`docs/openapi.yaml`](docs/openapi.yaml)         |
+| Local `/api/*` proxy (request body · response shape · status codes)                                 | the route handlers in [`server.mjs`](server.mjs) |
 
 The local proxy intentionally **reshapes** a few responses, so don't assume `/api/*` matches `openapi.yaml` one-to-one:
 
-- `POST /api/tts-token` → `{ speech_token }`.
+- `GET /api/connect-token` → `{ connect_token }`.
 - List endpoints normalize `avatar_id` / `scene_id` to `id`.
-- `GET /api/profile` is bespoke: `{ avatar, scene, voices }`, assembled for `presenter.initialize()`.
 
 #### Notes for agents
 
 - `api(path, { method, body })` (in `public/demos/basic/app.js`) is the fetch wrapper for all `/api/*` calls: it JSON-encodes
   `body`, returns parsed JSON, and throws an `Error` with `status` and `data` attached on any non-2xx response.
-- `avatarId`, `sceneId`, and `selectedVoiceId` are each the `id` field from the catalog list responses (the dropdown
-  selections).
-- The `avatar` / `scene` objects from `GET /api/profile` are passed verbatim to
-  `presenter.initialize(avatar, scene, speech_token)` — see `docs/presenter.d.ts` for their shape.
-- Treat any failure (error status or network error) from `POST /api/presentation` as a signal to fall back to a client-built,
-  TTS-only `Performance`.
+- `avatarId`, `sceneId`, and `voiceId` are each the `id` field from the catalog list responses (the dropdown selections) — they
+  are passed straight into the `PresentationTarget` object handed to `presenter.initialize()`.
+- `connect_token` from `GET /api/connect-token` is a real bearer credential once it reaches the browser — don't log it, and
+  don't assume it's safe to persist past the page session (see ["Auth model"](#auth-model)).
 
 ---
 
@@ -256,8 +248,6 @@ You've integrated the kit correctly when:
 4. After **Launch**, the status reaches `✓ Ready` and the avatar renders on the stage.
 5. A preset button (or the text box) makes the avatar speak.
 
-No credentials yet? Set `USE_MOCK=true` in `.env` to walk through the whole UI flow against documented response shapes.
-
 ---
 
 ## 6. Known limitations
@@ -266,9 +256,15 @@ No credentials yet? Set `USE_MOCK=true` in `.env` to walk through the whole UI f
   SDK.
 - **Shared credential model.** Every browser hitting this server shares one Connect identity (the `.env` service account) —
   there is no per-user login or per-user isolation. Fine for demos and hackathons; not a multi-tenant auth design.
+- **Mock mode is catalog-only.** It supplies fake catalog data but cannot emulate the presenter’s direct Connect API calls, so
+  Launch and playback are disabled until live credentials are configured.
+- **`refreshConnectToken`/`CONNECT_TOKEN_EXPIRED` are not wired up.** The presenter dispatches `CONNECT_TOKEN_EXPIRED` when the
+  Connect API rejects the token it's using; this sample doesn't listen for it or call `presenter.refreshConnectToken()` in
+  response, so a long-running session can go stale once the shared `connect_token` expires — reload the page to mint a fresh
+  one via `GET /api/connect-token`.
+- **`presentWithAudio()` isn't implemented yet** by the presenter SDK itself — only `present()` (built-in speech synthesis) is
+  usable today.
 - **Chat is opt-in.** The chat panel stays disabled (and `POST /api/chat` returns `501`) until you set `LLM_API_KEY`.
-- **Backend presentation is optional.** `POST /api/presentation` may be unavailable in your environment; the app falls back to
-  client-built, TTS-only performances (no SSML/motion timing).
 - **Minimal UI.** Plain vanilla JS with no framework or build step — intentionally, so the integration is easy to read.
 
 ---
@@ -297,8 +293,9 @@ restart.
 kit requires **Node `>=22`** — run `nvm use` (reads `.nvmrc`) if you use nvm, or check `node --version` and upgrade at
 [nodejs.org](https://nodejs.org/).
 
-**The avatar loads but won't speak via the backend.** `POST /api/presentation` is likely unavailable in your environment. That's
-expected — the app logs a warning and falls back to a client-built performance, so the avatar still speaks.
+**The avatar initializes but won't speak.** `present()` resolves with a `PresentationResult` whose `success` is `false` —
+check the status message it surfaces (`code`/`message`) for why (e.g. no target resolved yet, or the Connect API rejected the
+presentation request). Also confirm the presenter reached `Ready` first.
 
 ---
 
@@ -308,8 +305,6 @@ Once the happy path runs, make it yours:
 
 - **Customize the UI.** Replace the preset buttons and layout in `public/demos/basic/app.js` and `public/demos/basic/index.html`
   with your own.
-- **Build richer performances.** Add SSML, motion timing, and voice selection behind `POST /api/presentation` in `server.mjs` —
-  the frontend already falls back gracefully when it's absent.
 - **Get editor autocomplete.** Point your IDE at `docs/presenter.d.ts` for types and JSDoc on the presenter API.
 - **Enable chat.** Set `LLM_API_KEY` (and optionally `LLM_BASE_URL`, `LLM_MODEL`) to turn on the chat panel.
 

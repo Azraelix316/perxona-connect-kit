@@ -11,26 +11,6 @@
  * This file also includes the supporting data types and the <sv-presenter>
  * event types (PresentationWidgetEvent and friends) for use with addEventListener.
  */
-// -- type/AssetQuality.ts ----------------------------------------------------
-
-export declare enum AssetQuality {
-    High = "lod0",
-    Medium = "lod1",
-    Low = "lod2"
-}
-
-// -- type/AvatarConfig.ts ----------------------------------------------------
-
-export type MotionSet = Record<MotionState, MotionAsset[]>;
-export type AvatarConfig = {
-    id: string;
-    assetUrls: Record<AssetQuality, string>;
-    motions: MotionSet;
-    defaultFacial: MotionAsset[];
-    lipsyncMode: LipSyncMode;
-    lipsyncConfig: Record<string, LipSyncConfig>;
-};
-
 // -- type/CameraConfig.ts ----------------------------------------------------
 
 export declare enum CameraAngle {
@@ -55,6 +35,7 @@ export declare enum PresentationWidgetEvent {
     ASSET_LOADING_PROGRESS = "ASSET_LOADING_PROGRESS",
     AUDIO_PLAYBACK_STATE = "AUDIO_PLAYBACK_STATE",
     SPEECH_TOKEN_EXPIRED = "SPEECH_TOKEN_EXPIRED",
+    CONNECT_TOKEN_EXPIRED = "CONNECT_TOKEN_EXPIRED",
     PERFORMANCE_START = "PERFORMANCE_START",
     PERFORMANCE_END = "PERFORMANCE_END",
     ALL_PERFORMANCE_FINISHED = "ALL_PERFORMANCE_FINISHED",
@@ -99,6 +80,15 @@ export declare class AudioPlaybackStateEvent implements PresentationEvent {
 export declare class SpeechTokenExpiredEvent implements PresentationEvent {
     readonly eventType = PresentationWidgetEvent.SPEECH_TOKEN_EXPIRED;
 }
+/**
+ * Dispatched when the Connect Kit Bearer JWT has expired or is about to expire, so the host
+ * application can obtain a fresh token and call `refreshConnectToken`.
+ *
+ * Triggered by `ConnectProvider` whenever a Connect API call responds with 401.
+ */
+export declare class ConnectTokenExpiredEvent implements PresentationEvent {
+    readonly eventType = PresentationWidgetEvent.CONNECT_TOKEN_EXPIRED;
+}
 export declare class PerformanceStartEvent implements PresentationEvent {
     readonly eventType = PresentationWidgetEvent.PERFORMANCE_START;
 }
@@ -119,135 +109,19 @@ export declare class PlayingSpeechTextEvent implements PresentationEvent {
     constructor(text: string);
 }
 
-// -- type/LipSyncConfig.ts ---------------------------------------------------
-
-export declare enum LipSyncMode {
-    XRLipSync = "xrlipsync",
-    WLipSync = "wlipsync"
-}
-export type LipSyncConfig = {
-    configUrl: string;
-    profileUrl: string;
-};
-export declare enum BlendshapeProcessorType {
-    Raw = "raw",
-    Smoothed = "smoothed"
-}
-
-// -- type/MotionAsset.ts -----------------------------------------------------
-
-export declare enum MotionState {
-    Idle = "idle",
-    Talking = "talking",
-    Listening = "listening",
-    Loading = "loading",
-    Error = "error"
-}
-export declare enum MotionType {
-    Body = "body",
-    Face = "face"
-}
-export type MotionAsset = {
-    id: string;
-    type: MotionType;
-    assetUrl: string;
-};
-
-// -- type/Performance.ts -----------------------------------------------------
-
-export type Performance = {
-    /**
-     * All the preemptive motion assets that will be used in this performance.
-     * These motions should be preloaded before playing the performance to ensure smooth playback.
-     */
-    motions: MotionAsset[];
-    /**
-     * The text content of the performance
-     */
-    message: string;
-    /**
-     * The SSML string for the performance, which will be converted to speech.
-     */
-    ssml: string;
-    /**
-     * The name of the voice to be used for speech synthesis and switching lip-sync configuration in this performance.
-     */
-    voiceName: string;
-};
-export type PerformanceOptions = {
-    strategy: PlayStrategy;
-};
-export declare enum PlayStrategy {
-    /**
-     * Default strategy which will enqueue the performance to the end of the performance queue and play sequentially.
-     */
-    EnqueueToPlay = "enqueueToPlay",
-    /**
-     * This strategy will interrupt the current performance and clear the performance queue, then play the new performance immediately.
-     */
-    InterruptToPlay = "interruptToPlay"
-}
-export declare const DEFAULT_PERFORMANCE_OPTIONS: PerformanceOptions;
-
-// -- type/PerformanceClip.ts -------------------------------------------------
-
-export type Motion = {
-    bodyMotionId: string;
-    faceMotionId?: string;
-    /**
-     * The priority of the motion, ranging from 0 to 100.
-     * 0 means always preemptible, 100 means never preemptible.
-     */
-    priority: number;
-    /**
-     * Time offset from the PlayMotion trigger when the motion starts.
-     * @unit milliseconds
-     */
-    startAtMS: number;
-    /**
-     * Time offset from the PlayMotion trigger when the motion ends.
-     * If `undefined`, the motion will play until it naturally finishes.
-     * @unit milliseconds
-     */
-    endAtMS?: number;
-};
-export declare enum SilencePurpose {
-    /**
-     * Silence used to pace the speech segments to improve naturalness, e.g. 11labs inter-segment gaps
-     */
-    Pacing = "pacing",
-    /**
-     * Silence used to simulate agent thinking, e.g. spacer delay
-     */
-    Thinking = "thinking"
-}
-export type EndingSilence = {
-    purpose: SilencePurpose;
-    /**
-     * Duration of the silence in milliseconds.
-     * After this silence, the next performance clip will start.
-     * @unit milliseconds
-     */
-    durationMs: number;
-};
-export type PerformanceClip = {
-    id: string;
-    speechText: string;
-    speechData: ArrayBuffer;
-    audioData?: AudioBuffer;
-    voiceName: string;
-    blendshapeProcessorType: BlendshapeProcessorType;
-    motions: Motion[];
-    endingSilence?: EndingSilence;
-};
-
 // -- type/PresentationError.ts -----------------------------------------------
 
 export declare enum PresentationResultCode {
     OK = "0",
     COMPONENT_UNMOUNTED = "100",
     PRESENTER_NOT_READY = "101",
-    AUDIO_CONTEXT_UNAVAILABLE = "200"
+    AUDIO_CONTEXT_UNAVAILABLE = "200",
+    VOICE_NOT_CONFIGURED = "300",
+    NOT_INITIALIZED = "301",
+    SPEECH_FORMAT_UNSUPPORTED = "302",
+    PRESENTATION_INTERRUPTED = "303",
+    PRESENTATION_REQUEST_FAILED = "400",
+    NOT_IMPLEMENTED = "900"
 }
 export declare class PresentationResult {
     readonly success: boolean;
@@ -257,14 +131,49 @@ export declare class PresentationResult {
     static ok(): PresentationResult;
     static error(code: PresentationResultCode, message: string): PresentationResult;
     static componentUnmounted(): PresentationResult;
+    static presentationInterrupted(): PresentationResult;
     static presenterNotReady(currentStatus: PresenterStatus): PresentationResult;
+    static voiceNotConfigured(): PresentationResult;
+    static notInitialized(): PresentationResult;
+    static speechFormatUnsupported(): PresentationResult;
+    static presentationRequestFailed(message: string): PresentationResult;
+    static notImplemented(message: string): PresentationResult;
 }
 
-// -- type/SceneConfig.ts -----------------------------------------------------
+// -- type/PresentationTarget.ts ----------------------------------------------
 
-export type SceneConfig = {
-    id: string;
-    assetUrls: Record<AssetQuality, string>;
+/**
+ * Describes what `initialize` should present.
+ *
+ * Either a bundled `chatbotId` (which resolves to an avatar, scene, and voice together), or an
+ * explicit `avatarId` / `sceneId` / `voiceId` combination for finer-grained control. The `type`
+ * discriminant lets callers `switch` on it with exhaustive checking, instead of narrowing
+ * structurally (e.g. `'chatbotId' in target`).
+ *
+ * `chatbotId` is strictly all-or-nothing — it intentionally carries no other fields (e.g. no
+ * per-call `voiceId` override). Callers who need to customize the voice should use the explicit
+ * `avatarId` / `sceneId` / `voiceId` variant instead.
+ *
+ * TODO(internal tracking issue): resolving the `chatbot` shape via the
+ * Connect API is not implemented yet (the backend endpoint doesn't exist) — see
+ * `ConnectProvider.resolveTarget`. The `explicit` shape is fully resolved. Once the chatbot
+ * backend API lands, `chatbotId` here should likely be resolved by a `Chatbot` module that wraps
+ * `Presenter` (the same way `PerxonaWidget` wraps `Presenter`) rather than folded into
+ * `Presenter`'s own resolution flow — see the linked issue for the architecture discussion before
+ * implementing this shape.
+ */
+export type PresentationTarget = {
+    type: 'chatbot';
+    /** ID of a pre-configured chatbot bundling an avatar, scene, and voice together. */
+    chatbotId: string;
+} | {
+    type: 'explicit';
+    /** The ID of the avatar to initialize. */
+    avatarId: string;
+    /** The ID of the scene to initialize. */
+    sceneId: string;
+    /** The ID of the voice to use when synthesizing speech for `present`. */
+    voiceId?: string;
 };
 
 // -- IPresentationWidget.ts --------------------------------------------------
@@ -272,10 +181,13 @@ export type SceneConfig = {
 /**
  * Interface for the Presentation Widget.
  *
+ * This is the public contract for the `<sv-presenter>` custom element used by Connect Kit
+ * integrators.
+ *
  * **Performance State Hierarchy:**
  * Avatar animations follow a strict priority hierarchy to handle concurrent state requests:
- * 1. **Custom** (Highest) - Specific motions embedded via `playPerformance`.
- * 2. **Talking** - Standard speaking animation active during `playPerformance`.
+ * 1. **Custom** (Highest) - Specific motions embedded via `present`.
+ * 2. **Talking** - Standard speaking animation active during `present`.
  * 3. **Thinking** - Triggered by `setThinking(true)`.
  * 4. **Listening** - Triggered by `setListening(true)`.
  * 5. **Idle** (Lowest) - The default state when no other states are active.
@@ -286,32 +198,66 @@ export type SceneConfig = {
  */
 export interface IPresentationWidget {
     /**
-     * Initializes the presentation widget with the specified avatar, scene configuration, and speech token.
+     * Initializes the presentation widget with the specified target (chatbot, or avatar/scene/voice)
+     * and authenticates against the Connect API.
      *
-     * @param avatar The configuration for initializing an avatar
-     * @param scene The configuration for initializing a scene
-     * @param speechToken The Azure Speech Service token used for initializing speech synthesizer
+     * The resolved voice is retained internally and used by every subsequent `present` call.
+     * `connectToken` authenticates the Connect API calls used to resolve `target`; use
+     * `refreshConnectToken` afterwards to rotate it as it expires.
+     *
+     * @param connectToken The Connect Kit Bearer JWT used to authenticate Connect API calls
+     * @param target Either `{ type: 'chatbot', chatbotId }` or
+     *   `{ type: 'explicit', avatarId, sceneId, voiceId? }`
      */
-    initialize(avatar: AvatarConfig, scene: SceneConfig, speechToken: string): void;
+    initialize(connectToken: string, target: PresentationTarget): Promise<void>;
     /**
-     * Plays a performance which includes speech and motions with specific play strategy.
+     * Presents content: synthesizes it into speech using the voice provided to `initialize`, and
+     * plays it back on the avatar.
      *
      * Note: This activates the top-priority states (**Custom** / **Talking**). Any active lower-priority
      * states (Thinking, Listening) will be visually overridden and hidden until the performance completes
      * or is interrupted.
      *
-     * @param performance The data to transform into speech and motions and be played
-     * @param options The options to determine the play strategy of this performance, if not provided, it will use the default strategy (enqueue to play).
-     * @returns A PresentationResult indicating the success or failure of the play request, along with error code and message if applicable.
+     * `content` is plain spoken text; it may also embed Perxona motion markup (e.g. `[MOTION
+     * id:priority;faceId]` style annotations) to drive specific gestures at specific points in the
+     * speech. Any embedded markup is resolved and stripped internally — callers do not need to
+     * pre-process or strip it themselves before display. It is sent to the Connect API together
+     * with the `avatarId` / `voiceId` resolved by `initialize`, which returns a formatted speech
+     * payload and a motion performance manifest that are then synthesized and played back.
+     *
+     * The returned promise never rejects; it resolves with an error `PresentationResult` if no
+     * target has been resolved yet, the resolved target has no voice configured, the component is
+     * unmounted, or the Connect API request/response could not be used (e.g. an unsupported speech
+     * format). Calling `present` multiple times in quick succession is safe — playback is always in
+     * the same order the calls were made.
+     *
+     * It also resolves with an `AUDIO_CONTEXT_UNAVAILABLE` error until `resumeAudioPlayback` has
+     * been called at least once — the SDK never resumes the AudioContext on the caller's behalf; see
+     * `resumeAudioPlayback`.
+     *
+     * @param content The text content to be spoken, optionally containing embedded Perxona motion markup
+     * @returns A promise resolving to a PresentationResult indicating the success or failure of the play request, along with error code and message if applicable.
      */
-    playPerformance(performance: Performance, options?: PerformanceOptions): PresentationResult;
+    present(content: string): Promise<PresentationResult>;
     /**
-     * Interrupts the current performance and clear the performance queue
+     * Presents caller-provided audio directly, bypassing built-in speech synthesis, and plays it
+     * back on the avatar.
+     *
+     * TODO: wiring this to actual audio playback is not implemented yet.
+     *
+     * @param audio The raw audio data to play back (e.g. a WAV/PCM buffer from your own TTS or STT pipeline).
+     * @param content The text to display, optionally containing embedded Perxona motion markup
+     * that is resolved and stripped internally.
+     * @returns A promise resolving to a PresentationResult indicating the success or failure of the play request, along with error code and message if applicable.
+     */
+    presentWithAudio(audio: ArrayBuffer, content: string): Promise<PresentationResult>;
+    /**
+     * Interrupts the current presentation and clears the presentation queue.
      *
      * Note: This clears the Custom and Talking states, immediately revealing any underlying active
      * states (like Thinking or Listening) or falling back to Idle.
      */
-    interruptPerformance(): void;
+    interruptPresentation(): void;
     /**
      * Set the avatar to be in listening state, which will trigger the corresponding motions.
      *
@@ -342,6 +288,9 @@ export interface IPresentationWidget {
      * Call this method from a direct user interaction callback (e.g., a button click)
      * to ensure speech audio can be played.
      *
+     * Must be called at least once before `present` / `presentWithAudio` can succeed \u2014 the SDK
+     * never resumes the AudioContext on its own; see `present`'s `AUDIO_CONTEXT_UNAVAILABLE` case.
+     *
      * @returns A Promise that resolves when the context has resumed. The promise is rejected if the context has already been closed.
      */
     resumeAudioPlayback(): Promise<void>;
@@ -359,9 +308,10 @@ export interface IPresentationWidget {
      */
     updateCameraFOV(fov: CameraFOV): void;
     /**
-     * Used to refresh the speech synthesis token when it expired or about to expire, to ensure uninterrupted speech performance.
+     * Used to refresh the Connect Kit Bearer JWT when it expired or about to expire, to ensure
+     * uninterrupted access to the Connect API. See also the `CONNECT_TOKEN_EXPIRED` event.
      *
-     * @param token The token to synthesize speech.
+     * @param token The Connect Kit Bearer JWT.
      */
-    refreshSpeechToken(token: string): void;
+    refreshConnectToken(token: string): void;
 }

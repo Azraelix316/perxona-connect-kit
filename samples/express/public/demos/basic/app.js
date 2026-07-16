@@ -16,8 +16,11 @@
  * the same static build can target any CDN just by changing the env var.
  * @returns {Promise<void>} resolves once the presenter engine module has loaded
  */
-async function loadPresenterEngine() {
-  const { presenterUrl } = await fetch("/api/config").then((r) => r.json());
+async function loadPresenterEngine(presenterUrl) {
+  // DEMO-ONLY: presenterUrl is trusted as-is with no host allowlist before
+  // being injected as a <script src>. Acceptable for this sample, but not
+  // production-ready — a real integration should validate presenterUrl
+  // against a known CDN allowlist first.
   await new Promise((resolve, reject) => {
     const script = document.createElement("script");
     script.type = "module";
@@ -29,9 +32,19 @@ async function loadPresenterEngine() {
   });
 }
 
+const appConfig = await request("/api/config");
+
+// Mock mode only supports catalog browsing — the presenter always resolves
+// its target directly against the real Connect API, so launching it (loading
+// the engine script, enabling Launch, allowing playback) is disabled whenever
+// the server reports mock mode.
+const isPresenterLaunchDisabled = appConfig.mock;
+
 // Block the rest of this module until the presenter engine is loaded, so
 // <sv-presenter> is upgraded before any code below can call its methods.
-await loadPresenterEngine();
+if (!isPresenterLaunchDisabled) {
+  await loadPresenterEngine(appConfig.presenterUrl);
+}
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -60,22 +73,12 @@ const chatHint = document.getElementById("chat-hint");
 /** In-memory conversation history (OpenAI message format), reset on reload. */
 const chatHistory = [];
 
-/**
- * AvatarConfig captured from /api/profile at launch. speak() reuses it to
- * hand-build a fallback Performance in the browser (see buildPerformance) when
- * the /api/presentation call fails.
- * @type {object | null}
- */
-let avatarConfig = null;
+// No client-side AvatarConfig bookkeeping needed anymore: presenter.initialize()
+// takes a Connect token + target, and presenter.present() builds the Performance
+// internally via the Connect API. initBtn's click handler reads the picked
+// avatarId/sceneId/voiceId straight from the <select>s and passes them through.
 
-/**
- * The voice_id selected at launch. The TTS token is minted for this voice, so
- * the same id is reused when refreshing an expired token.
- * @type {string | null}
- */
-let selectedVoiceId = null;
-
-/** @type {HTMLElement & import('./types').IPresentationWidget} */
+/** @type {HTMLElement & import('../../../docs/presenter.d.ts').IPresentationWidget} */
 const presenter = document.querySelector("sv-presenter");
 
 // ── API helper ─────────────────────────────────────────────────────────────
@@ -151,7 +154,8 @@ function updateAssetIcon(img, items, id, thumbnailKey) {
 }
 
 function updateInitBtn() {
-  initBtn.disabled = !avatarSelect.value || !sceneSelect.value;
+  initBtn.disabled =
+    isPresenterLaunchDisabled || !avatarSelect.value || !sceneSelect.value;
 }
 
 avatarSelect.addEventListener("change", () => {
@@ -180,19 +184,25 @@ async function loadCatalog() {
     updateInitBtn();
     updateAssetIcon(avatarIcon, avatars, avatarSelect.value, "head");
     updateAssetIcon(sceneIcon, scenes, sceneSelect.value, "default");
-    setStatus("");
+    if (isPresenterLaunchDisabled) {
+      stagePlaceholder.querySelector("p").textContent =
+        "Mock mode supports catalog browsing only.";
+      setStatus("Configure live credentials to launch the presenter.");
+    } else {
+      setStatus("");
+    }
   } catch (err) {
-    const hint =
+    const credentialHint =
       err.status === 401 || err.status === 403
         ? " — check the server's PERXONA_CONNECT_EMAIL/PASSWORD in .env"
         : "";
-    setStatus(`Catalog error: ${err.message}${hint}`);
+    setStatus(`Catalog error: ${err.message}${credentialHint}`);
   }
 }
 
 // ── Presenter events ───────────────────────────────────────────────────────
 
-const STATUS_LABEL = {
+const STATUS_LABELS = {
   Uninitialized: "",
   Initializing: "Initializing…",
   Ready: "✓ Ready",
@@ -200,7 +210,7 @@ const STATUS_LABEL = {
 
 presenter.addEventListener("PRESENTER_STATUS", (e) => {
   const { status } = e.detail;
-  setStatus(STATUS_LABEL[status] ?? status);
+  setStatus(STATUS_LABELS[status] ?? status);
   if (status === "Ready") {
     stagePlaceholder.hidden = true;
     presenter.hidden = false;
@@ -208,30 +218,41 @@ presenter.addEventListener("PRESENTER_STATUS", (e) => {
   }
 });
 
-presenter.addEventListener("SPEECH_TOKEN_EXPIRED", async () => {
-  try {
-    const { speech_token } = await request("/api/tts-token", {
-      method: "POST",
-      body: { voice_id: selectedVoiceId },
-    });
-    presenter.refreshSpeechToken(speech_token);
-  } catch {
-    console.error("[connect-kit] Failed to refresh speech token");
-  }
-});
-
 // ── Initialize presenter ───────────────────────────────────────────────────
 
+/**
+ * Fetch a fresh Connect bearer token from the server's connect-token
+ * endpoint. Split out from the click handler so "get a token" reads as one
+ * step, separate from the surrounding UI state management.
+ * @returns {Promise<string>} the Connect bearer token
+ */
+async function fetchConnectToken() {
+  const { connect_token } = await request("/api/connect-token");
+  return connect_token;
+}
+
+/**
+ * Build the PresentationTarget for presenter.initialize() from the currently
+ * picked avatar/scene/voice <select> values.
+ * @returns {{ type: "explicit", avatarId: string, sceneId: string, voiceId: (string|undefined) }}
+ */
+function buildPresentationTarget() {
+  return {
+    type: "explicit",
+    avatarId: avatarSelect.value,
+    sceneId: sceneSelect.value,
+    voiceId: voiceSelect.value || undefined,
+  };
+}
+
 initBtn.addEventListener("click", async () => {
-  const avatarId = avatarSelect.value;
-  const sceneId = sceneSelect.value;
+  if (isPresenterLaunchDisabled) {
+    setStatus("Configure live credentials to launch the presenter.");
+    return;
+  }
 
   initBtn.disabled = true;
-  setStatus("Fetching config…");
-
-  // The TTS token is minted for the selected voice; remember it so the
-  // SPEECH_TOKEN_EXPIRED handler can refresh the token for the same voice.
-  selectedVoiceId = voiceSelect.value || null;
+  setStatus("Fetching connect token…");
 
   try {
     // resumeAudioPlayback must be called from a direct user gesture to unlock
@@ -239,23 +260,13 @@ initBtn.addEventListener("click", async () => {
     // returns a Promise that resolves once the audio context has resumed.
     await presenter.resumeAudioPlayback?.();
 
-    const [{ avatar, scene }, { speech_token }] = await Promise.all([
-      request(
-        `/api/profile?avatar=${encodeURIComponent(
-          avatarId,
-        )}&scene=${encodeURIComponent(sceneId)}`,
-      ),
-      request("/api/tts-token", {
-        method: "POST",
-        body: { voice_id: selectedVoiceId },
-      }),
-    ]);
+    const connectToken = await fetchConnectToken();
 
     setStatus("Initializing…");
-    // Keep the avatar config so speak() can build a Performance client-side as a
-    // fallback when /api/presentation fails.
-    avatarConfig = avatar;
-    presenter.initialize(avatar, scene, speech_token);
+    // initialize() resolves avatar/scene/motions and mints a speech token
+    // directly against the Connect API using connectToken — this server no
+    // longer assembles that bundle itself (see README "Auth model").
+    await presenter.initialize(connectToken, buildPresentationTarget());
     // Status label is then driven by PRESENTER_STATUS events above.
   } catch (err) {
     setStatus(`Error: ${err.message}`);
@@ -266,44 +277,15 @@ initBtn.addEventListener("click", async () => {
 // ── Performance ────────────────────────────────────────────────────────────
 //
 // All three entry points (preset buttons, the free-text box, and chat) drive
-// the presenter through speak(): ask the backend to build the Performance
-// (POST /api/presentation), which is where real apps add SSML, motion timing,
-// and voice selection. If that upstream call fails, speak() falls back to a
-// client-built, TTS-only Performance (buildPerformance → playLine) so the
-// avatar still speaks the line.
-
-/** Escape a string for safe interpolation into SSML/XML text. */
-function escapeXml(text) {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
+// the presenter through speak(): presenter.present(text) synthesizes speech
+// and resolves motion timing via the Connect API (using the avatar/voice
+// resolved by initialize()) and plays it back.
 
 /**
- * Hand-build a TTS-only Performance from a line of text. The avatar speaks the
- * message with no motions and clean SSML (no bookmarks) — the minimal payload
- * the presenter needs. voiceName is taken from the avatar's lip-sync config so
- * it's a voice the avatar is actually tuned for.
- * @param {string} message
- * @returns {{ motions: [], message: string, ssml: string, voiceName: string }}
- */
-function buildPerformance(message) {
-  const voiceName =
-    Object.keys(avatarConfig?.lipsyncConfig ?? {})[0] ?? "en-US-AriaNeural";
-  const ssml =
-    `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">` +
-    `<voice name="${voiceName}">${escapeXml(message)}</voice></speak>`;
-  return { motions: [], message, ssml, voiceName };
-}
-
-/**
- * Surface a presenter PresentationResult. playPerformance returns a
+ * Surface a presenter PresentationResult. present() returns a
  * PresentationResult (not void): when `success` is false, `code` and `message`
- * explain why the request was rejected (e.g. presenter not ready, audio context
- * unavailable) so the UI can react instead of silently dropping the line.
+ * explain why the request was rejected (e.g. presenter not ready, no target
+ * resolved yet) so the UI can react instead of silently dropping the line.
  * @param {{ success: boolean, code: string, message?: string }} result
  */
 function reportPlaybackResult(result) {
@@ -312,60 +294,27 @@ function reportPlaybackResult(result) {
   }
 }
 
-/** Play a line of text using a client-built Performance. */
-function playLine(text) {
-  const message = text.trim();
-  if (!message || !avatarConfig) return;
-  const result = presenter.playPerformance(buildPerformance(message), {
-    strategy: "enqueueToPlay",
-  });
-  reportPlaybackResult(result);
-}
-
 /**
- * Turn a line of text into a presenter performance: ask the backend to build
- * the Performance payload, then enqueue it for playback. If the presentation
- * endpoint fails for any reason, fall back to a client-built, TTS-only
- * Performance (line only, no motions) so the avatar still speaks.
+ * Turn a line of text into a presenter performance: present() sends it to the
+ * Connect API (using the avatar/voice resolved by initialize()), synthesizes
+ * it into speech, and plays it back on the avatar. present() isn't expected
+ * to reject, but network/SDK errors are still caught defensively so they
+ * surface via setStatus() instead of becoming an unhandled rejection.
  * @param {string} message
  */
 async function speak(message) {
   const text = message.trim();
   if (!text) return;
   try {
-    const presentation = await request("/api/presentation", {
-      method: "POST",
-      body: {
-        avatar_id: avatarConfig?.id,
-        voice_id: selectedVoiceId,
-        message: text,
-      },
-    });
-    const result = presenter.playPerformance(presentation, {
-      strategy: "enqueueToPlay",
-    });
+    const result = await presenter.present(text);
     reportPlaybackResult(result);
   } catch (err) {
-    if (err.status === 401 || err.status === 403) {
-      // The server's Connect credentials are missing or rejected upstream —
-      // a setup problem, not a transient presentation failure. Surface it
-      // instead of silently falling back to a client-built performance.
-      setStatus(
-        `Auth error: ${err.message} — check the server's PERXONA_CONNECT_EMAIL/PASSWORD in .env`,
-      );
-      return;
-    }
-    console.warn(
-      "[connect-kit] /api/presentation failed — speaking line only (no motions)",
-      err.message,
-    );
-    playLine(text);
+    setStatus(`Error: ${err.message}`);
   }
 }
 
-// Preset buttons and the free-text box ask the backend to build the Performance
-// (POST /api/presentation → speak), falling back to a client-built, TTS-only
-// Performance only if that upstream call fails.
+// Preset buttons and the free-text box call presenter.present() directly —
+// the widget builds the Performance via the Connect API internally.
 perfControls.querySelectorAll(".btn-preset").forEach((btn) => {
   btn.addEventListener("click", () => speak(btn.dataset.text));
 });
@@ -378,20 +327,15 @@ sayForm.addEventListener("submit", (e) => {
 
 // Stop: clear the queue and interrupt the current performance immediately.
 stopBtn.addEventListener("click", () => {
-  presenter.interruptPerformance();
+  presenter.interruptPresentation();
 });
 
 // ── Chat (opt-in) ──────────────────────────────────────────────────────────
 
-/** Read the static chat flag from /api/config, then reveal panel or hint. */
-async function updateChatPanel() {
-  try {
-    const { chat } = await request("/api/config");
-    chatPanel.hidden = !chat;
-    chatHint.hidden = Boolean(chat);
-  } catch {
-    chatHint.hidden = false;
-  }
+/** Reveal the chat panel or hint from the static config loaded at startup. */
+function updateChatPanel() {
+  chatPanel.hidden = appConfig.mock || !appConfig.chat;
+  chatHint.hidden = appConfig.mock || Boolean(appConfig.chat);
 }
 
 function appendChat(role, content) {
@@ -436,6 +380,6 @@ function setStatus(text) {
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 // No login step: the server already authenticated with its own Connect
 // credentials (see .env), so the catalog can load as soon as the presenter
-// engine is ready.
+// engine is ready. Mock mode loads catalog data only.
 await loadCatalog();
-await updateChatPanel();
+updateChatPanel();

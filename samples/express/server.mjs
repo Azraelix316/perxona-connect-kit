@@ -7,7 +7,7 @@ const PERXONA_API_BASE_URL = process.env.PERXONA_API_BASE_URL;
 const USE_MOCK = process.env.USE_MOCK === "true";
 const PRESENTER_URL =
   process.env.PRESENTER_URL ||
-  "https://cdn.perxona.ai/connect/latest/widget/entry/presenter.js";
+  "https://cdn.perxona.ai/prod/latest/widget/entry/presenter.js";
 // Server-side credentials for the one shared Connect API identity this sample
 // uses — see README "Auth model". Every browser hitting this server acts
 // through the same upstream account; there is no per-user login.
@@ -87,131 +87,6 @@ async function checkPresenter() {
   }
 }
 
-// ── Profile assembly helpers ───────────────────────────────────────────────
-
-const MOTION_STATES = ["idle", "talking", "listening", "loading", "error"];
-
-/**
- * Categorise ConnectMotionAssetResponse items into a MotionSet keyed by
- * MotionState. Motions whose tags start with 'face:' are excluded (see buildDefaultFacial).
- * @param {Array} items  ConnectMotionAssetResponse[]
- * @returns {Record<string, Array>}
- */
-const isFaceTag = (tag) => tag.startsWith("face:");
-
-/**
- * Resolve the presenter lipsync mode from the avatar detail response.
- *
- * Preference order:
- * 1. `wlipsync` when available
- * 2. `xrlipsync` as the fallback legacy mode
- * 3. `wlipsync` as the default when no known config exists
- *
- * @param {Record<string, unknown>} lipsyncConfigs
- * Avatar lipsync config map from ConnectAvatarDetailResponse.lipsync_configs.
- *
- * @returns {"wlipsync" | "xrlipsync"}
- * The selected lipsync mode used to read the matching config map.
- */
-const getLipsyncMode = (lipsyncConfigs) => {
-  if ("wlipsync" in lipsyncConfigs) return "wlipsync";
-  if ("xrlipsync" in lipsyncConfigs) return "xrlipsync";
-  return "wlipsync";
-};
-
-function buildMotionSet(items) {
-  const motionSet = Object.fromEntries(MOTION_STATES.map((s) => [s, []]));
-  for (const m of items) {
-    if (m.tags?.some(isFaceTag)) continue;
-    const assetUrl =
-      m.lod_urls?.lod0 ?? m.lod_urls?.lod1 ?? m.lod_urls?.lod2 ?? "";
-    const asset = { id: m.motion_id, type: "body", assetUrl };
-    for (const tag of m.tags ?? []) {
-      if (MOTION_STATES.includes(tag)) motionSet[tag].push(asset);
-    }
-  }
-  return motionSet;
-}
-
-/**
- * Extract face motions (any tag starting with 'face:') as defaultFacial MotionAsset entries.
- * @param {Array} items  ConnectMotionAssetResponse[]
- * @returns {Array}
- */
-function buildDefaultFacial(items) {
-  return items
-    .filter((m) => m.tags?.some(isFaceTag))
-    .map((m) => ({
-      id: m.motion_id,
-      type: "face",
-      assetUrl: m.lod_urls?.lod0 ?? m.lod_urls?.lod1 ?? m.lod_urls?.lod2 ?? "",
-    }));
-}
-
-/**
- * Map upstream LipSyncConfig entries to presenter shape.
- * Backend: { config_url, resource_url } → Presenter: { configUrl, profileUrl }
- * @param {Record<string, object>} rawMap  voice_name → upstream LipSyncConfig
- * @returns {Record<string, { configUrl: string, profileUrl: string }>}
- */
-function buildLipsyncConfig(rawMap) {
-  return Object.fromEntries(
-    Object.entries(rawMap).map(([voiceName, cfg]) => [
-      voiceName,
-      { configUrl: cfg.config_url ?? "", profileUrl: cfg.resource_url ?? "" },
-    ]),
-  );
-}
-
-// Map an upstream manifest entry's asset type → presenter MotionType.
-// The Connect API reports 'motion' (body) and 'facial_motion' (face).
-const MOTION_TYPE_BY_ASSET_TYPE = { motion: "body", facial_motion: "face" };
-
-// The presenter's `ssml` field expects SSML. The backend currently only emits
-// 'ssml', but ConnectPresentationResponse.speech_format also allows 'raw_text'
-// and 'markup'. Guard so a future format change fails loudly here instead of
-// silently feeding non-SSML into the presenter.
-const SUPPORTED_SPEECH_FORMAT = "ssml";
-
-/**
- * Map an upstream ConnectPresentationResponse to the presenter `Performance`
- * shape ({ motions, message, ssml, voiceName }) that playPerformance() expects.
- *
- * Backend → presenter:
- *   performance_manifest (motionId → AssetLodCdnUrl) → motions: MotionAsset[]
- *   display_text   → message   (clean, displayable text)
- *   speech_content → ssml      (synthesis-ready payload, must be SSML)
- *   voice_name     → voiceName
- *
- * @param {object} resp  ConnectPresentationResponse
- * @returns {{ motions: Array, message: string, ssml: string, voiceName: string }}
- */
-function buildPerformance(resp) {
-  if (resp.speech_format !== SUPPORTED_SPEECH_FORMAT) {
-    throw Object.assign(
-      new Error(
-        `Unsupported speech_format '${resp.speech_format}'. ` +
-          `This sample only maps '${SUPPORTED_SPEECH_FORMAT}' to the presenter; ` +
-          `add a mapper for the new format before enabling it.`,
-      ),
-      { status: 502 },
-    );
-  }
-  const motions = Object.entries(resp.performance_manifest ?? {}).map(
-    ([id, lod]) => ({
-      id,
-      type: MOTION_TYPE_BY_ASSET_TYPE[lod.type] ?? "body",
-      assetUrl: lod.lod0 ?? lod.lod1 ?? lod.lod2 ?? "",
-    }),
-  );
-  return {
-    motions,
-    message: resp.display_text ?? "",
-    ssml: resp.speech_content ?? "",
-    voiceName: resp.voice_name ?? "",
-  };
-}
-
 // connectApi — real upstream implementation, thin wrappers around call().
 // Route handlers reference api.* and never touch USE_MOCK directly.
 const connectApi = {
@@ -232,37 +107,6 @@ const connectApi = {
     return upstreamJson(r, "login");
   },
 
-  // TTS token: POST /api/v1/connect/voice-tokens/tts
-  // If voiceId is omitted the first available voice is auto-selected so the
-  // frontend can call /api/tts-token without managing voice selection itself.
-  // Named after presenter.refreshSpeechToken() — the same token this mints is
-  // what initialize() consumes first and refreshSpeechToken() re-mints later.
-  async refreshSpeechToken(voiceId, token) {
-    let id = voiceId;
-    if (!id) {
-      const vr = await this.voices(token);
-      id = (vr.items ?? [])[0]?.id;
-      if (!id) {
-        throw Object.assign(
-          new Error("No voices available to generate TTS token"),
-          {
-            status: 503,
-            payload: { error: "No voices configured for this organization." },
-          },
-        );
-      }
-    }
-    const r = await callUpstream(
-      "/api/v1/connect/voice-tokens/tts",
-      { method: "POST", body: JSON.stringify({ voice_id: id }) },
-      token,
-    );
-    const { token: azureToken } = await upstreamJson(r, "tts-token");
-    // Normalise to { speech_token } — the string presenter.initialize() /
-    // refreshSpeechToken() expects.
-    return { speech_token: azureToken };
-  },
-
   async voices(token) {
     const r = await callUpstream("/api/v1/connect/voices", {}, token);
     return upstreamJson(r, "voices"); // Page[ConnectVoiceResponse] — items already have { id, name, … }
@@ -281,7 +125,8 @@ const connectApi = {
     };
   },
 
-  // Raw detail — consumed by profile() for AvatarConfig assembly.
+  // Raw avatar detail — the frontend never calls this directly; it's exposed as a
+  // standalone REST resource for reference (see docs/openapi.yaml).
   async avatar(id, token) {
     const r = await callUpstream(
       `/api/v1/connect/assets/avatars/${id}`,
@@ -314,7 +159,8 @@ const connectApi = {
     };
   },
 
-  // Raw detail — consumed by profile() for SceneConfig assembly.
+  // Raw scene detail — the frontend never calls this directly; it's exposed as a
+  // standalone REST resource for reference (see docs/openapi.yaml).
   async scene(id, token) {
     const r = await callUpstream(
       `/api/v1/connect/assets/scenes/${id}`,
@@ -322,57 +168,6 @@ const connectApi = {
       token,
     );
     return upstreamJson(r, "scene detail");
-  },
-
-  async createPresentation(body, token) {
-    const r = await callUpstream(
-      "/api/v1/connect/presentation",
-      { method: "POST", body: JSON.stringify(body) },
-      token,
-    );
-    // Map ConnectPresentationResponse → presenter Performance shape.
-    return buildPerformance(await upstreamJson(r, "presentation"));
-  },
-
-  // Profile bundle — assembles the full AvatarConfig + SceneConfig + voices the
-  // presenter needs for initialize(), so the frontend makes one call instead of
-  // stitching catalog endpoints together.
-  //
-  // Upstream connect endpoints:
-  //   GET  /api/v1/connect/assets/avatars/:id         → ConnectAvatarDetailResponse
-  //   GET  /api/v1/connect/assets/scenes/:id          → ConnectSceneDetailResponse
-  //   GET  /api/v1/connect/assets/avatars/:id/motions → Page[ConnectMotionAssetResponse]
-  //   GET  /api/v1/connect/voices                     → Page[ConnectVoiceResponse]
-  async profile(avatarId, sceneId, token) {
-    const [avatarDetail, sceneDetail, voicesResp, motionsPage] =
-      await Promise.all([
-        this.avatar(avatarId, token),
-        this.scene(sceneId, token),
-        this.voices(token),
-        this.avatarMotions(avatarId, token),
-      ]);
-
-    // Prefer wlipsync; fall back to xrlipsync; default to wlipsync.
-    const lipsyncConfigs = avatarDetail.lipsync_configs ?? {};
-    const lipsyncMode = getLipsyncMode(lipsyncConfigs);
-
-    return {
-      avatar: {
-        id: avatarDetail.avatar_id,
-        // lod_urls keys ('lod0','lod1','lod2') match AssetQuality enum values
-        // ('lod0'='High','lod1'='Medium','lod2'='Low') used by the presenter.
-        assetUrls: avatarDetail.lod_urls ?? {},
-        motions: buildMotionSet(motionsPage.items ?? []),
-        defaultFacial: buildDefaultFacial(motionsPage.items ?? []),
-        lipsyncMode,
-        lipsyncConfig: buildLipsyncConfig(lipsyncConfigs[lipsyncMode] ?? {}),
-      },
-      scene: {
-        id: sceneDetail.scene_id,
-        assetUrls: sceneDetail.lod_urls ?? {},
-      },
-      voices: voicesResp,
-    };
   },
 };
 
@@ -512,58 +307,35 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
-// POST /api/tts-token
-// Request: { voice_id? } — when omitted the server auto-selects the first available voice.
-// Returns: { speech_token } — the string presenter.initialize()/refreshSpeechToken() expects.
-// Errors:  502 upstream failure · 503 no voices configured.
-app.post(
-  "/api/tts-token",
-  route(async (req, res) => {
-    const voiceId = req.body?.voice_id;
-    res.json(
-      await authedCall((token) => api.refreshSpeechToken(voiceId, token)),
-    );
+// GET /api/connect-token
+// Returns: { connect_token } — the Connect Kit Bearer JWT the browser passes into
+//          presenter.initialize(connectToken, target). From there, <sv-presenter>
+//          talks to the Connect API directly to resolve the target, mint its own
+//          speech token, and refresh it — this server's only job is minting the
+//          token via its one shared login (see "Auth model" in README).
+//          The token is validated against the catalog first, so a cached token
+//          rejected with 401/403 is refreshed before it reaches the browser.
+// Errors:  502 upstream login failure.
+app.get(
+  "/api/connect-token",
+  route(async (_req, res) => {
+    res.set({ "Cache-Control": "no-store", Pragma: "no-cache" });
+    const connectToken = await authedCall(async (token) => {
+      await api.voices(token);
+      return token;
+    });
+    res.json({ connect_token: connectToken });
   }),
 );
 
-// ── Catalog + presentation routes ───────────────────────────────────────────
+// ── Catalog routes ──────────────────────────────────────────────────────────
 // GET  /api/voices
 // GET  /api/avatars          GET  /api/avatars/:id    GET  /api/avatars/:id/motions
 // GET  /api/scenes           GET  /api/scenes/:id
-// GET  /api/profile?avatar=&scene=
-// POST /api/presentation
 // POST /api/chat             (disabled when LLM_API_KEY is unset → 501)
 //
 // All routes below share the one server-side Connect identity via authedCall();
 // there is no per-request auth check — see the token manager above.
-
-// GET /api/profile?avatar=<id>&scene=<id>
-// Returns: { avatar: AvatarConfig, scene: SceneConfig, voices: Page } — one bundle the
-//          presenter needs, so the frontend can initialize() without stitching catalog
-//          responses together. Mirrors the production widget's profile pattern.
-// Errors:  400 when 'avatar' or 'scene' is missing.
-// Shapes:  AvatarConfig / SceneConfig are defined in docs/presenter.d.ts.
-app.get(
-  "/api/profile",
-  route(async (req, res) => {
-    const { avatar, scene } = req.query;
-    if (!avatar || !scene) {
-      res
-        .status(400)
-        .json({ error: "Query params 'avatar' and 'scene' are required." });
-      return;
-    }
-    res.json(
-      await authedCall((token) =>
-        api.profile(
-          encodeURIComponent(avatar),
-          encodeURIComponent(scene),
-          token,
-        ),
-      ),
-    );
-  }),
-);
 
 // Catalog — read-only lists + single items used to populate UI dropdowns.
 //   GET /api/voices              → Page { items: [{ id, name, … }] }
@@ -615,22 +387,6 @@ app.get(
   route(async (req, res) => {
     const id = encodeURIComponent(req.params.id);
     res.json(await authedCall((token) => api.scene(id, token)));
-  }),
-);
-
-// POST /api/presentation
-// Request: { avatar_id, voice_id, message } — avatar_id/voice_id select the assets and
-//          voice profile; a real app may also add SSML or motion timing on top.
-// Returns: a presenter-ready Performance payload (see docs/presenter.d.ts), mapped from
-//          the upstream ConnectPresentationResponse.
-// Errors:  any failure (error status or network error) signals the frontend to fall back to
-//          a client-built, TTS-only Performance (line only, no motions).
-app.post(
-  "/api/presentation",
-  route(async (req, res) => {
-    res.json(
-      await authedCall((token) => api.createPresentation(req.body, token)),
-    );
   }),
 );
 
