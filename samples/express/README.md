@@ -29,15 +29,27 @@ request; there's no login screen.
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [1. Purpose](#1-purpose)
-- [2. Installation](#2-installation)
-- [3. Running](#3-running)
-- [4. API & SDK integration](#4-api--sdk-integration)
-- [5. Acceptance](#5-acceptance)
-- [6. Known limitations](#6-known-limitations)
-- [7. Troubleshooting (FAQ)](#7-troubleshooting-faq)
-- [Next steps](#next-steps)
+- [Perxona Connect Kit](#perxona-connect-kit)
+  - [Quick start](#quick-start)
+  - [Contents](#contents)
+  - [1. Purpose](#1-purpose)
+    - [Auth model](#auth-model)
+  - [2. Installation](#2-installation)
+    - [Prerequisites](#prerequisites)
+    - [Steps](#steps)
+  - [3. Running](#3-running)
+  - [4. API \& SDK integration](#4-api--sdk-integration)
+    - [Backend API routes](#backend-api-routes)
+    - [SDK: the `<sv-presenter>` Web Component](#sdk-the-sv-presenter-web-component)
+    - [Initialization (the basic flow)](#initialization-the-basic-flow)
+    - [Error handling](#error-handling)
+    - [Contracts](#contracts)
+      - [Notes for agents](#notes-for-agents)
+  - [5. Acceptance](#5-acceptance)
+  - [6. Known limitations](#6-known-limitations)
+  - [7. Troubleshooting (FAQ)](#7-troubleshooting-faq)
+  - [Next steps](#next-steps)
+  - [License](#license)
 
 ---
 
@@ -162,13 +174,15 @@ The presenter is loaded from Perxona's CDN. `app.js` fetches `GET /api/config` o
 
 `app.js` drives it through its JS API. The members used by this sample:
 
-| Member                                       | Role                                                                                          |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `presenter.initialize(connectToken, target)` | Boot the presenter: resolves `target` and mints its own speech token against the Connect API. |
-| `presenter.resumeAudioPlayback()`            | Unlock browser autoplay. **Must run from a direct user gesture** (the Launch click).          |
-| `presenter.present(content)`                 | Synthesize `content` into speech and play it back on the avatar.                              |
-| `presenter.interruptPresentation()`          | Stop the current performance and clear the queue.                                             |
-| event `PRESENTER_STATUS`                     | `Uninitialized` → `Initializing` → `Ready`.                                                   |
+| Member                                       | Role                                                                                           |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `presenter.initialize(connectToken, target)` | Boot the presenter: resolves `target` and mints its own speech token against the Connect API.  |
+| `presenter.resumeAudioPlayback()`            | Unlock browser autoplay. **Must run from a direct user gesture** (the Launch click).           |
+| `presenter.present(content)`                 | Synthesize `content` into speech and play it back on the avatar.                               |
+| `presenter.presentWithAudio(audio, content)` | Play back a supplied speech audio buffer with `content` as the transcript for the performance. |
+| `presenter.playMotion(motionId)`             | Resolve, preload, and play one body motion independently from the speech queue.                |
+| `presenter.interruptPresentation()`          | Stop the current performance and clear the queue.                                              |
+| event `PRESENTER_STATUS`                     | `Uninitialized` → `Initializing` → `Ready`.                                                    |
 
 ### Initialization (the basic flow)
 
@@ -182,7 +196,6 @@ const { connect_token } = await api("/api/connect-token");
 // 3. Initialize — the presenter resolves avatarId/sceneId/voiceId against the
 //    Connect API itself and emits PRESENTER_STATUS as it becomes Ready.
 await presenter.initialize(connect_token, {
-  type: "explicit",
   avatarId,
   sceneId,
   voiceId, // optional — omit to use presentWithAudio() instead of present()
@@ -193,6 +206,9 @@ Once `PRESENTER_STATUS` reports `Ready`, make the avatar speak:
 
 ```js
 const result = await presenter.present("Hello!");
+
+// Play a body motion without waiting for or changing the speech queue.
+const motionResult = await presenter.playMotion("known-motion-id");
 ```
 
 `present()` builds the speech + motion performance internally via the Connect API, using the avatar/voice resolved by
@@ -262,8 +278,6 @@ You've integrated the kit correctly when:
   Connect API rejects the token it's using; this sample doesn't listen for it or call `presenter.refreshConnectToken()` in
   response, so a long-running session can go stale once the shared `connect_token` expires — reload the page to mint a fresh
   one via `GET /api/connect-token`.
-- **`presentWithAudio()` isn't implemented yet** by the presenter SDK itself — only `present()` (built-in speech synthesis) is
-  usable today.
 - **Chat is opt-in.** The chat panel stays disabled (and `POST /api/chat` returns `501`) until you set `LLM_API_KEY`.
 - **Minimal UI.** Plain vanilla JS with no framework or build step — intentionally, so the integration is easy to read.
 

@@ -62,6 +62,9 @@ const perfControls = document.getElementById("perf-controls");
 const sayForm = document.getElementById("say-form");
 const sayInput = document.getElementById("say-input");
 const stopBtn = document.getElementById("stop-btn");
+const audioForm = document.getElementById("audio-form");
+const audioFileInput = document.getElementById("audio-file");
+const audioTextInput = document.getElementById("audio-text");
 
 // Chat panel (opt-in)
 const chatPanel = document.getElementById("chat-panel");
@@ -234,11 +237,10 @@ async function fetchConnectToken() {
 /**
  * Build the PresentationTarget for presenter.initialize() from the currently
  * picked avatar/scene/voice <select> values.
- * @returns {{ type: "explicit", avatarId: string, sceneId: string, voiceId: (string|undefined) }}
+ * @returns {{ avatarId: string, sceneId: string, voiceId: (string|undefined) }}
  */
 function buildPresentationTarget() {
   return {
-    type: "explicit",
     avatarId: avatarSelect.value,
     sceneId: sceneSelect.value,
     voiceId: voiceSelect.value || undefined,
@@ -313,6 +315,24 @@ async function speak(message) {
   }
 }
 
+/**
+ * Present a user-supplied audio file with accompanying text: reads the file
+ * into an ArrayBuffer and calls presenter.presentWithAudio(). Mirrors speak()
+ * in structure — errors surface via setStatus().
+ * @param {File} file
+ * @param {string} text
+ */
+async function speakWithAudio(file, text) {
+  if (!file || !text.trim()) return;
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await presenter.presentWithAudio(arrayBuffer, text.trim());
+    reportPlaybackResult(result);
+  } catch (err) {
+    setStatus(`Error: ${err.message}`);
+  }
+}
+
 // Preset buttons and the free-text box call presenter.present() directly —
 // the widget builds the Performance via the Connect API internally.
 perfControls.querySelectorAll(".btn-preset").forEach((btn) => {
@@ -323,6 +343,15 @@ sayForm.addEventListener("submit", (e) => {
   e.preventDefault();
   speak(sayInput.value);
   sayInput.value = "";
+});
+
+// ── Present with audio file ────────────────────────────────────────────────
+audioForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const file = audioFileInput.files[0];
+  const text = audioTextInput.value.trim();
+  speakWithAudio(file, text);
+  audioForm.reset();
 });
 
 // Stop: clear the queue and interrupt the current performance immediately.

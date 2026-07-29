@@ -40,6 +40,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/auth/forgot-password:
+    post:
+      tags:
+        - connect
+        - connect
+      summary: Start a Connect forgot-password flow
+      description: |-
+        Send a password-reset email without exposing whether the user exists.
+
+        ## Rate Limit 
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: post_v1_connect_connect_forgot_password
+      parameters:
+        - name: lang
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - $ref: '#/components/schemas/Language'
+              - type: 'null'
+            title: Lang
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/auth/reset-password:
+    post:
+      tags:
+        - connect
+        - connect
+      summary: Reset a Connect user's password from a forgot-password token
+      description: |-
+        Reset a password without issuing a Connect access token.
+
+        ## Rate Limit 
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: post_v1_connect_connect_reset_password
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/connect/auth/signup:
     post:
       tags:
@@ -118,6 +187,12 @@ paths:
                 $ref: '#/components/schemas/ConnectLoginResponse'
         '400':
           description: The token is invalid or not a sign-up token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token belongs to a different sign-up flow (e.g. a web sign-up token).
           content:
             application/json:
               schema:
@@ -253,8 +328,8 @@ paths:
         - connect
       summary: List avatar motions
       description: >-
-        Return a paginated list of active motions compatible with the avatar's skeleton, optionally filtered by pose
-        tag.
+        Return a paginated list of active motions compatible with the avatar's skeleton, optionally filtered by pose tag
+        or one or more motion IDs.
       operationId: get_v1_connect_list_connect_avatar_motions
       security:
         - HTTPBearer: []
@@ -274,6 +349,17 @@ paths:
                 pattern: ^pose:[a-z0-9_]+$
               - type: 'null'
             title: Pose Tag
+        - name: motion_ids
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - type: array
+                items:
+                  type: string
+                  minLength: 1
+              - type: 'null'
+            title: Motion Ids
         - name: page
           in: query
           required: false
@@ -534,6 +620,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/voices/{voice_id}:
+    get:
+      tags:
+        - connect
+        - connect
+      summary: Get Connect voice synthesis details
+      description: >-
+        Return the public provider-specific synthesis configuration for a custom voice visible to the current
+        organization.
+
+
+        ## Rate Limit 
+
+        This endpoint is limit __30 calls / 1 seconds__
+      operationId: get_v1_connect_connect_get_voice_detail
+      security:
+        - HTTPBearer: []
+      parameters:
+        - name: voice_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Voice Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ConnectGoogleVoiceDetailResponse'
+                  - $ref: '#/components/schemas/ConnectAzureVoiceDetailResponse'
+                discriminator:
+                  propertyName: provider
+                  mapping:
+                    google: '#/components/schemas/ConnectGoogleVoiceDetailResponse'
+                    azure: '#/components/schemas/ConnectAzureVoiceDetailResponse'
+                title: Response Connect Get Voice Detail Api V1 Connect Voices  Voice Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/connect/voice-tokens/tts:
     post:
       tags:
@@ -605,25 +736,6 @@ paths:
       security:
         - HTTPBearer: []
   /api/v1/connect/chatbots:
-    get:
-      tags:
-        - connect
-        - connect
-      summary: List chat bots
-      description: List all non-deleted chat bots (including disabled ones) for the caller's organization as lightweight summaries.
-      operationId: get_v1_connect_list_chat_bots
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: '#/components/schemas/ChatBotSummaryResponse'
-                type: array
-                title: Response List Chat Bots Api V1 Connect Chatbots Get
-      security:
-        - HTTPBearer: []
     post:
       tags:
         - connect
@@ -638,12 +750,14 @@ paths:
 
         This endpoint is limit __5 calls / 60 seconds__
       operationId: post_v1_connect_create_chat_bot
+      security:
+        - HTTPBearer: []
       requestBody:
+        required: true
         content:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/Body_create_chat_bot_api_v1_connect_chatbots_post'
-        required: true
       responses:
         '201':
           description: Successful Response
@@ -657,8 +771,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+        - connect
+        - connect
+      summary: List chat bots
+      description: >-
+        List all non-deleted chat bots (including disabled ones) for the caller's organization as paginated lightweight
+        summaries.
+      operationId: get_v1_connect_list_chat_bots
       security:
         - HTTPBearer: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            title: Page
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            default: 50
+            title: Size
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_ChatBotSummaryResponse_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/connect/chatbots/{chat_bot_id}:
     get:
       tags:
@@ -792,6 +946,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+      description: |-
+
+
+        ## Rate Limit 
+        This endpoint is limit __30 calls / 60 seconds__
 components:
   schemas:
     AssetLOD:
@@ -857,6 +1016,15 @@ components:
         - facial_motion
       title: AssetType
       description: The type of the asset
+    AudioEncoding:
+      type: string
+      enum:
+        - LINEAR16
+        - MP3
+        - OGG_OPUS
+        - MULAW
+        - ALAW
+      title: AudioEncoding
     AvatarThumbnailType:
       type: string
       enum:
@@ -1042,6 +1210,55 @@ components:
         - lod_urls
         - lipsync_configs
       title: ConnectAvatarDetailResponse
+    ConnectAzureVoice:
+      properties:
+        name:
+          type: string
+          title: Name
+      type: object
+      required:
+        - name
+      title: ConnectAzureVoice
+      description: Azure voice selection fields used by the Speech SDK.
+    ConnectAzureVoiceDetailResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Description
+        provider:
+          type: string
+          const: azure
+          title: Provider
+        languages:
+          items:
+            $ref: '#/components/schemas/Language'
+          type: array
+          title: Languages
+        region:
+          $ref: '#/components/schemas/VoiceRegion'
+        endpoint_url:
+          type: string
+          title: Endpoint Url
+        voice:
+          $ref: '#/components/schemas/ConnectAzureVoice'
+      type: object
+      required:
+        - id
+        - name
+        - provider
+        - languages
+        - region
+        - endpoint_url
+        - voice
+      title: ConnectAzureVoiceDetailResponse
     ConnectChatBotChatRequest:
       properties:
         messages:
@@ -1083,12 +1300,16 @@ components:
         file_id:
           type: string
           title: File Id
+        name:
+          type: string
+          title: Name
         status:
           $ref: '#/components/schemas/ConnectKnowledgeFileStatus'
       type: object
       required:
         - chat_bot_id
         - file_id
+        - name
         - status
       title: ConnectChatBotKnowledgeFileDO
       description: Domain object describing a chat bot's bound knowledge file.
@@ -1100,6 +1321,7 @@ components:
           items:
             $ref: '#/components/schemas/ConnectChatBotMessagePart'
           type: array
+          maxItems: 10
           minItems: 1
           title: Parts
       type: object
@@ -1135,6 +1357,7 @@ components:
       items:
         $ref: '#/components/schemas/ConnectChatBotMessage'
       type: array
+      maxItems: 1001
       minItems: 1
       title: ConnectChatBotMessages
     ConnectChatBotStatus:
@@ -1274,15 +1497,108 @@ components:
         token:
           type: string
           title: Token
+        username:
+          type: string
+          title: Username
         password:
           type: string
           title: Password
       type: object
       required:
         - token
+        - username
         - password
       title: ConnectConfirmSignupRequest
       description: The request to complete a Connect email sign-up flow.
+    ConnectGoogleAudioConfig:
+      properties:
+        audioEncoding:
+          $ref: '#/components/schemas/AudioEncoding'
+        speakingRate:
+          type: number
+          title: Speakingrate
+        pitch:
+          type: number
+          title: Pitch
+        volumeGainDb:
+          anyOf:
+            - type: number
+            - type: 'null'
+          title: Volumegaindb
+        sampleRateHertz:
+          type: integer
+          title: Sampleratehertz
+        effectsProfileId:
+          anyOf:
+            - items:
+                type: string
+              type: array
+            - type: 'null'
+          title: Effectsprofileid
+      type: object
+      required:
+        - audioEncoding
+        - speakingRate
+        - pitch
+        - sampleRateHertz
+      title: ConnectGoogleAudioConfig
+      description: Normalized Google Cloud TTS audio configuration exposed to Connect.
+    ConnectGoogleVoice:
+      properties:
+        name:
+          type: string
+          title: Name
+        model_name:
+          type: string
+          title: Model Name
+      type: object
+      required:
+        - name
+        - model_name
+      title: ConnectGoogleVoice
+      description: Google voice selection fields used by the Cloud TTS request.
+    ConnectGoogleVoiceDetailResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Description
+        provider:
+          type: string
+          const: google
+          title: Provider
+        languages:
+          items:
+            $ref: '#/components/schemas/Language'
+          type: array
+          title: Languages
+        region:
+          $ref: '#/components/schemas/VoiceRegion'
+        endpoint_url:
+          type: string
+          title: Endpoint Url
+        voice:
+          $ref: '#/components/schemas/ConnectGoogleVoice'
+        audio_config:
+          $ref: '#/components/schemas/ConnectGoogleAudioConfig'
+      type: object
+      required:
+        - id
+        - name
+        - provider
+        - languages
+        - region
+        - endpoint_url
+        - voice
+        - audio_config
+      title: ConnectGoogleVoiceDetailResponse
     ConnectKnowledgeFileStatus:
       type: string
       enum:
@@ -1398,12 +1714,18 @@ components:
             $ref: '#/components/schemas/AssetLOD'
           type: object
           title: Lod Urls
+        thumbnail:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Thumbnail
       type: object
       required:
         - motion_id
         - name
         - tags
         - lod_urls
+        - thumbnail
       title: ConnectMotionAssetResponse
     ConnectPresentationRequest:
       properties:
@@ -1414,11 +1736,16 @@ components:
           title: Avatar Id
           description: Avatar asset ID used to load presentation assets for this request.
         voice_id:
-          type: string
-          maxLength: 26
-          minLength: 26
+          anyOf:
+            - type: string
+              maxLength: 26
+              minLength: 26
+              description: A valid ULID string
+            - type: 'null'
           title: Voice Id
-          description: Custom voice ID used to format the speech payload for this request.
+          description: >-
+            Custom voice ID used to format the speech payload. Omit for BYO TTS mode: no speech synthesis runs and
+            speech_format is returned as unknown.
         message:
           type: string
           minLength: 1
@@ -1427,7 +1754,6 @@ components:
       type: object
       required:
         - avatar_id
-        - voice_id
         - message
       title: ConnectPresentationRequest
       description: Request to generate a presenter payload for a plain text message.
@@ -1450,22 +1776,29 @@ components:
           title: Presentation
           description: Spoken text before SSML conversion, preserving motion marks for downstream consumers.
         speech_content:
-          type: string
+          anyOf:
+            - type: string
+            - type: 'null'
           title: Speech Content
           description: >-
             The formatted payload for the speech synthesis engine. Depending on the active voice profile, this may
             contain specific acoustic markup (such as SSML tags or bracketed prompts) to control intonation and pacing.
+            Null in BYO TTS mode (request omitted voice_id); clients should read display_text instead.
         speech_format:
           $ref: '#/components/schemas/SpeechFormat'
-          description: Speech content format (plain_text, ssml, or markup).
+          description: 'Speech content format: raw_text, ssml, markup, or unknown (BYO TTS mode).'
         language:
           type: string
           title: Language
           description: Language code (e.g. 'en', 'zh').
         voice_name:
-          type: string
+          anyOf:
+            - type: string
+            - type: 'null'
           title: Voice Name
-          description: Identifier for the voice model used by the presenter widget.
+          description: >-
+            Identifier for the voice model used by the presenter widget. Null in BYO TTS mode (request omitted
+            voice_id).
       type: object
       required:
         - display_text
@@ -1606,12 +1939,19 @@ components:
         - past_30_days
         - custom
       title: DateRangeStrEnum
+    EmailRequest:
+      properties:
+        email:
+          type: string
+          format: email
+          title: Email
+      type: object
+      required:
+        - email
+      title: EmailRequest
+      description: The validated email address
     Error:
       properties:
-        http_status_code:
-          type: integer
-          title: Http Status Code
-          default: 500
         code:
           $ref: '#/components/schemas/ErrorCode'
           default: 1
@@ -1623,6 +1963,10 @@ components:
           additionalProperties: true
           type: object
           title: Payload
+        http_status_code:
+          type: integer
+          title: Http Status Code
+          default: 500
       type: object
       title: Error
       description: The base schema class the all error response should inherit from
@@ -1642,6 +1986,7 @@ components:
         - 1005
         - 1006
         - 1007
+        - 1008
         - 2000
         - 2001
         - 2002
@@ -1712,6 +2057,7 @@ components:
         - 8000
         - 8001
         - 8002
+        - 8003
         - 9000
         - 9001
         - 9002
@@ -1771,10 +2117,14 @@ components:
         - 20003
         - 20004
         - 20005
+        - 20006
+        - 20007
         - 21000
         - 21001
         - 21002
         - 21003
+        - 22000
+        - 22001
       title: ErrorCode
       description: |-
         Define the error codes for error responses.
@@ -1868,6 +2218,37 @@ components:
         - xrlipsync
       title: LipSyncMode
       description: The lip sync mode
+    Page_ChatBotSummaryResponse_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ChatBotSummaryResponse'
+          type: array
+          title: Items
+        total:
+          type: integer
+          minimum: 0
+          title: Total
+        page:
+          type: integer
+          minimum: 1
+          title: Page
+        size:
+          type: integer
+          minimum: 1
+          title: Size
+        pages:
+          type: integer
+          minimum: 0
+          title: Pages
+      type: object
+      required:
+        - items
+        - total
+        - page
+        - size
+        - pages
+      title: Page[ChatBotSummaryResponse]
     Page_ConnectListAvatarResponse_:
       properties:
         items:
@@ -1992,6 +2373,24 @@ components:
         - size
         - pages
       title: Page[ConnectVoiceResponse]
+    ResetPasswordRequest:
+      properties:
+        token:
+          type: string
+          title: Token
+        new_password:
+          type: string
+          title: New Password
+        confirm_password:
+          type: string
+          title: Confirm Password
+      type: object
+      required:
+        - token
+        - new_password
+        - confirm_password
+      title: ResetPasswordRequest
+      description: The change password request schema
     SceneThumbnailType:
       type: string
       enum:
@@ -2013,6 +2412,7 @@ components:
         - raw_text
         - ssml
         - markup
+        - unknown
       title: SpeechFormat
     ValidationError:
       properties:

@@ -67,6 +67,23 @@
               />
               <button type="submit" id="say-btn">Send</button>
             </form>
+
+            <label class="section-label" for="audio-file"
+              >Present with audio</label
+            >
+            <form id="audio-form" class="audio-form">
+              <input id="audio-file" type="file" accept="audio/*" />
+              <div class="say-row">
+                <input
+                  id="audio-text"
+                  type="text"
+                  placeholder="Text to accompany audio…"
+                  autocomplete="off"
+                />
+                <button type="submit" id="audio-send-btn">Send</button>
+              </div>
+            </form>
+
             <button id="stop-btn" class="btn-ghost">Stop</button>
           </div>
 

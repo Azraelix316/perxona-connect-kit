@@ -228,6 +228,12 @@ button:disabled {
   flex-shrink: 0;
 }
 
+.audio-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .chat-log {
   display: flex;
   flex-direction: column;
