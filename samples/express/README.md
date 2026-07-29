@@ -101,10 +101,60 @@ for its lifetime — wiring `refreshConnectToken`/`CONNECT_TOKEN_EXPIRED` for lo
 
 - **Node `>=22`** — check with `node --version`. Using nvm? Run `nvm use` in this directory (reads `.nvmrc`). If your Node is
   too old, `npm install` refuses to run and `npm run dev`/`npm start` fail with a message telling you what to upgrade to.
-- **Perxona service account credentials** (email + password) with access to the Connect API — ask your Perxona contact. The same
-  person provides the region-specific API base URL. The server uses these credentials directly — there is no browser sign-in.
-- The credentials need permission to read avatars, scenes, and voices, and to mint TTS tokens and presentations \u2014 the browser
+- **Perxona Connect account** (email + password) — the server uses these credentials to authenticate on your behalf. See
+  [Getting a Connect account](#getting-a-connect-account) below if you do not have one yet.
+- **Region-specific API base URL** — provided by your Perxona contact (e.g. `https://api.perxona.ai/eu`).
+- The account needs permission to read avatars, scenes, and voices, and to mint TTS tokens and presentations — the browser
   calls all of those directly against the Connect API once it has the `connect_token` (see ["Auth model"](#auth-model)).
+
+### Getting a Connect account
+
+If you do not have a Connect account yet, you can create one through the two-step sign-up flow:
+
+**Step 1 — request the sign-up token** (rate-limited: 10 calls / 60 seconds):
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "you@example.com" }'
+```
+
+A sign-up token is sent to that email address.
+
+**Step 2 — confirm your sign-up and set a password** (rate-limited: 10 calls / 60 seconds):
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/confirm-signup" \
+  -H "Content-Type: application/json" \
+  -d '{ "token": "<token from email>", "username": "your-username", "password": "your-password" }'
+```
+
+A successful response returns `{ "access_token": "..." }` — your account is ready. Use the email and password you set in `.env`
+for `PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD`.
+
+Already have an account? You can verify your credentials with a direct login call:
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "you@example.com", "password": "your-password" }'
+```
+
+If you forget your password, start the reset flow:
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/forgot-password" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "you@example.com" }'
+```
+
+Then complete the reset with the token sent to your email:
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/reset-password" \
+  -H "Content-Type: application/json" \
+  -d '{ "token": "<token from email>", "new_password": "new-password", "confirm_password": "new-password" }'
+```
 
 ### Steps
 
@@ -196,6 +246,7 @@ const { connect_token } = await api("/api/connect-token");
 // 3. Initialize — the presenter resolves avatarId/sceneId/voiceId against the
 //    Connect API itself and emits PRESENTER_STATUS as it becomes Ready.
 await presenter.initialize(connect_token, {
+  type: "explicit",
   avatarId,
   sceneId,
   voiceId, // optional — omit to use presentWithAudio() instead of present()

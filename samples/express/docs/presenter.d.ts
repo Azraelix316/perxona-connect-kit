@@ -144,10 +144,31 @@ export declare class PresentationResult {
 // -- type/PresentationTarget.ts ----------------------------------------------
 
 /**
- * Describes what `initialize` should present: an explicit `avatarId` / `sceneId` / `voiceId`
- * combination.
+ * Describes what `initialize` should present.
+ *
+ * Either a bundled `chatbotId` (which resolves to an avatar, scene, and voice together), or an
+ * explicit `avatarId` / `sceneId` / `voiceId` combination for finer-grained control. The `type`
+ * discriminant lets callers `switch` on it with exhaustive checking, instead of narrowing
+ * structurally (e.g. `'chatbotId' in target`).
+ *
+ * `chatbotId` is strictly all-or-nothing — it intentionally carries no other fields (e.g. no
+ * per-call `voiceId` override). Callers who need to customize the voice should use the explicit
+ * `avatarId` / `sceneId` / `voiceId` variant instead.
+ *
+ * TODO(internal tracking issue): resolving the `chatbot` shape via the
+ * Connect API is not implemented yet (the backend endpoint doesn't exist) — see
+ * `ConnectProvider.resolveTarget`. The `explicit` shape is fully resolved. Once the chatbot
+ * backend API lands, `chatbotId` here should likely be resolved by a `Chatbot` module that wraps
+ * `Presenter` (the same way `PerxonaWidget` wraps `Presenter`) rather than folded into
+ * `Presenter`'s own resolution flow — see the linked issue for the architecture discussion before
+ * implementing this shape.
  */
 export type PresentationTarget = {
+    type: 'chatbot';
+    /** ID of a pre-configured chatbot bundling an avatar, scene, and voice together. */
+    chatbotId: string;
+} | {
+    type: 'explicit';
     /** The ID of the avatar to initialize. */
     avatarId: string;
     /** The ID of the scene to initialize. */
@@ -178,15 +199,16 @@ export type PresentationTarget = {
  */
 export interface IPresentationWidget {
     /**
-     * Initializes the presentation widget with the specified target (avatar/scene/voice) and
-     * authenticates against the Connect API.
+     * Initializes the presentation widget with the specified target (chatbot, or avatar/scene/voice)
+     * and authenticates against the Connect API.
      *
      * The resolved voice is retained internally and used by every subsequent `present` call.
      * `connectToken` authenticates the Connect API calls used to resolve `target`; use
      * `refreshConnectToken` afterwards to rotate it as it expires.
      *
      * @param connectToken The Connect Kit Bearer JWT used to authenticate Connect API calls
-     * @param target `{ avatarId, sceneId, voiceId? }`
+     * @param target Either `{ type: 'chatbot', chatbotId }` or
+     *   `{ type: 'explicit', avatarId, sceneId, voiceId? }`
      */
     initialize(connectToken: string, target: PresentationTarget): Promise<void>;
     /**
@@ -232,8 +254,6 @@ export interface IPresentationWidget {
     /**
      * Presents caller-provided audio directly, bypassing built-in speech synthesis, and plays it
      * back on the avatar.
-     *
-     * TODO: wiring this to actual audio playback is not implemented yet.
      *
      * @param audio The raw audio data to play back (e.g. a WAV/PCM buffer from your own TTS or STT pipeline).
      * @param content The text to display, optionally containing embedded Perxona motion markup
