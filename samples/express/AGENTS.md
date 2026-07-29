@@ -24,6 +24,23 @@ The server does two jobs:
 `/api/chat` is opt-in — it returns `501` until you set `LLM_API_KEY`, then forwards to an OpenAI-compatible `/chat/completions`
 endpoint. Ollama works via `LLM_BASE_URL`.
 
+Chatbot CRUD routes let you create and manage Connect chatbots from the sample server:
+
+| Route                                | Description                                                                |
+| ------------------------------------ | -------------------------------------------------------------------------- |
+| `GET /api/chatbots`                  | List all chatbots                                                          |
+| `POST /api/chatbots`                 | Create a chatbot (`{ name, custom_instructions?, tools? }`)                |
+| `GET /api/chatbots/:id`              | Get chatbot detail including tools                                         |
+| `PATCH /api/chatbots/:id`            | Update name, instructions, or tools                                        |
+| `DELETE /api/chatbots/:id`           | Delete a chatbot                                                           |
+| `POST /api/chatbots/:id/knowledge`   | Upload a knowledge file (`{ filename, content_base64, mime_type? }`)       |
+| `DELETE /api/chatbots/:id/knowledge` | Remove the knowledge file                                                  |
+| `POST /api/chatbots/:id/chat`        | Chat with a chatbot (`{ messages: [...] }`) → `{ id, status, reply_text }` |
+
+Create and update are forwarded as `multipart/form-data` — send plain JSON from the browser; the proxy handles re-encoding.
+Knowledge uploads accept `.txt`, `.pdf`, `.doc`, `.docx`, `.csv` files encoded as base64 in the JSON body.
+Tools (function-calling definitions for external APIs) are documented in `public/demos/chatbot/connect-chat-bot-function-tools.md`.
+
 ### `public/demos/basic/app.js` — vanilla JS, no build step
 
 Zero dependencies, no bundler. The presenter is a Web Component loaded from Perxona's CDN; `app.js` fetches `GET /api/config` on

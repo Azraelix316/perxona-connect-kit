@@ -69,6 +69,25 @@ async function upstreamJson(r, label) {
 }
 
 /**
+ * Send an authenticated request to the upstream API without forcing Content-Type.
+ * Used for multipart/form-data endpoints (chatbot create/update) where fetch must
+ * set the Content-Type + boundary automatically from the FormData body.
+ * @param {string} path  - Upstream path, e.g. '/api/v1/connect/chatbots'
+ * @param {"POST"|"PATCH"} method
+ * @param {FormData} form
+ * @param {string} [token] - JWT access token
+ */
+async function callUpstreamFormData(path, method, form, token) {
+  const headers = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return fetch(`${PERXONA_API_BASE_URL}${path}`, {
+    method,
+    headers,
+    body: form,
+  });
+}
+
+/**
  * Probe whether the presenter engine is reachable at PRESENTER_URL.
  * Non-fatal diagnostic only — a HEAD request with a short timeout so startup
  * never blocks. Catches the common "PRESENTER_URL points at a channel that
@@ -168,6 +187,105 @@ const connectApi = {
       token,
     );
     return upstreamJson(r, "scene detail");
+  },
+
+  // ── Chatbot CRUD ──────────────────────────────────────────────────────────
+  //
+  // Create/update use multipart/form-data because the upstream supports an
+  // optional knowledge_file upload. The Express proxy accepts plain JSON from
+  // the browser and re-encodes it as FormData before forwarding. This keeps
+  // the browser-facing API simple (JSON), while matching what the upstream expects.
+
+  async listChatbots(token) {
+    const r = await callUpstream("/api/v1/connect/chatbots?size=50", {}, token);
+    return upstreamJson(r, "chatbots");
+  },
+
+  async getChatbot(id, token) {
+    const r = await callUpstream(
+      `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+      {},
+      token,
+    );
+    return upstreamJson(r, "chatbot detail");
+  },
+
+  async createChatbot({ name, custom_instructions, tools }, token) {
+    const form = new FormData();
+    form.append("name", name);
+    if (custom_instructions != null)
+      form.append("custom_instructions", custom_instructions);
+    if (tools !== undefined) form.append("tools", JSON.stringify(tools));
+    const r = await callUpstreamFormData(
+      "/api/v1/connect/chatbots",
+      "POST",
+      form,
+      token,
+    );
+    return upstreamJson(r, "create chatbot");
+  },
+
+  async updateChatbot(
+    id,
+    { name, custom_instructions, tools, remove_knowledge },
+    token,
+  ) {
+    const form = new FormData();
+    if (name != null) form.append("name", name);
+    if (custom_instructions !== undefined)
+      form.append("custom_instructions", custom_instructions ?? "");
+    if (tools !== undefined) form.append("tools", JSON.stringify(tools));
+    if (remove_knowledge) form.append("remove_knowledge", "true");
+    const r = await callUpstreamFormData(
+      `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+      "PATCH",
+      form,
+      token,
+    );
+    return upstreamJson(r, "update chatbot");
+  },
+
+  // Upload a knowledge file for a chatbot by PATCHing with knowledge_file.
+  // The caller supplies a Buffer so this method stays independent of Express.
+  async uploadChatbotKnowledge(id, fileBuffer, filename, mimeType, token) {
+    const form = new FormData();
+    form.append(
+      "knowledge_file",
+      new Blob([fileBuffer], { type: mimeType }),
+      filename,
+    );
+    const r = await callUpstreamFormData(
+      `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+      "PATCH",
+      form,
+      token,
+    );
+    return upstreamJson(r, "upload chatbot knowledge");
+  },
+
+  async deleteChatbot(id, token) {
+    const r = await callUpstream(
+      `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+      token,
+    );
+    if (!r.ok) {
+      const payload = await r.json().catch(() => ({}));
+      throw Object.assign(new Error("upstream delete chatbot failed"), {
+        status: r.status,
+        payload,
+      });
+    }
+    // 204 No Content — intentionally returns nothing
+  },
+
+  async chatWithChatbot(id, messages, token) {
+    const r = await callUpstream(
+      `/api/v1/connect/chatbots/${encodeURIComponent(id)}/chat`,
+      { method: "POST", body: JSON.stringify({ messages }) },
+      token,
+    );
+    return upstreamJson(r, "chat with chatbot");
   },
 };
 
@@ -387,6 +505,232 @@ app.get(
   route(async (req, res) => {
     const id = encodeURIComponent(req.params.id);
     res.json(await authedCall((token) => api.scene(id, token)));
+  }),
+);
+
+// ── Chatbot routes ──────────────────────────────────────────────────────────
+// GET    /api/chatbots              → Page { items: [{ id, name, status }] }
+// POST   /api/chatbots              → ChatBotDetailResponse (201 proxied as 200)
+// GET    /api/chatbots/:id          → ChatBotDetailResponse (id, name, custom_instructions, status, tools)
+// PATCH  /api/chatbots/:id          → ChatBotDetailResponse
+// DELETE /api/chatbots/:id          → 204 No Content
+// POST   /api/chatbots/:id/chat     → { id, status, reply_text }
+//
+// Create and update are forwarded as multipart/form-data (see callUpstreamFormData).
+// The browser sends JSON; the proxy re-encodes it before forwarding upstream.
+
+app.get(
+  "/api/chatbots",
+  route(async (_req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    res.json(await authedCall((token) => api.listChatbots(token)));
+  }),
+);
+
+app.post(
+  "/api/chatbots",
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const { name, custom_instructions, tools } = req.body ?? {};
+    if (!name || typeof name !== "string") {
+      res.status(400).json({ error: "'name' is required." });
+      return;
+    }
+    const created = await authedCall((token) =>
+      api.createChatbot({ name, custom_instructions, tools }, token),
+    );
+    // upstream returns 201; surface as 200 for consistent demo fetch handling
+    res.json(created);
+  }),
+);
+
+app.get(
+  "/api/chatbots/:id",
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const id = req.params.id;
+    res.json(await authedCall((token) => api.getChatbot(id, token)));
+  }),
+);
+
+app.patch(
+  "/api/chatbots/:id",
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const id = req.params.id;
+    const { name, custom_instructions, tools, remove_knowledge } =
+      req.body ?? {};
+    res.json(
+      await authedCall((token) =>
+        api.updateChatbot(
+          id,
+          { name, custom_instructions, tools, remove_knowledge },
+          token,
+        ),
+      ),
+    );
+  }),
+);
+
+app.delete(
+  "/api/chatbots/:id",
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const id = req.params.id;
+    await authedCall((token) => api.deleteChatbot(id, token));
+    res.status(204).end();
+  }),
+);
+
+// Allowlisted file extensions and MIME types for knowledge uploads.
+// Matches the frontend <input accept=".txt,.pdf,.doc,.docx,.csv"> constraint so
+// the server rejects any attempt to bypass the client-side restriction.
+const KNOWLEDGE_ALLOWED_EXTENSIONS = new Set([
+  ".txt",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".csv",
+]);
+const KNOWLEDGE_ALLOWED_MIME_TYPES = new Set([
+  "text/plain",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
+  "application/octet-stream", // fallback when browser cannot detect MIME
+]);
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+// POST /api/chatbots/:id/knowledge
+// Body: { filename, content_base64, mime_type }
+// Reads the base64-encoded file from the JSON body, converts it to a Buffer,
+// and PATCHes the upstream chatbot with knowledge_file as multipart/form-data.
+// Separating knowledge upload avoids needing a multipart parser on this server.
+// express.json() defaults to 100 KB; base64 adds ~33% overhead, so a 5 MB file
+// would balloon to ~6.7 MB in transit. The per-route limit below allows files up
+// to ~7.5 MB (10 MB after base64 expansion) without raising the global limit.
+app.post(
+  "/api/chatbots/:id/knowledge",
+  express.json({ limit: "10mb" }),
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const id = req.params.id;
+    const { filename, content_base64, mime_type } = req.body ?? {};
+    if (!filename || !content_base64) {
+      res
+        .status(400)
+        .json({ error: "'filename' and 'content_base64' are required." });
+      return;
+    }
+
+    // Reject filenames containing path separators to prevent directory traversal.
+    if (filename.includes("/") || filename.includes("\\")) {
+      res.status(400).json({ error: "Invalid filename." });
+      return;
+    }
+
+    // Enforce extension allowlist (aligns with frontend <input accept> constraint).
+    const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+    if (!KNOWLEDGE_ALLOWED_EXTENSIONS.has(ext)) {
+      res.status(400).json({
+        error: `File type not allowed. Accepted extensions: ${[...KNOWLEDGE_ALLOWED_EXTENSIONS].join(", ")}.`,
+      });
+      return;
+    }
+
+    // Validate MIME type if provided.
+    const effectiveMime = mime_type || "application/octet-stream";
+    if (!KNOWLEDGE_ALLOWED_MIME_TYPES.has(effectiveMime)) {
+      res.status(400).json({
+        error: `MIME type not allowed: ${effectiveMime}.`,
+      });
+      return;
+    }
+
+    // Basic base64 format check before decoding.
+    if (!BASE64_RE.test(content_base64)) {
+      res.status(400).json({ error: "Invalid base64 content." });
+      return;
+    }
+
+    const buffer = Buffer.from(content_base64, "base64");
+    res.json(
+      await authedCall((token) =>
+        api.uploadChatbotKnowledge(id, buffer, filename, effectiveMime, token),
+      ),
+    );
+  }),
+);
+
+// DELETE /api/chatbots/:id/knowledge
+// Sends remove_knowledge=true via PATCH to clear the chatbot's knowledge file.
+app.delete(
+  "/api/chatbots/:id/knowledge",
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const id = req.params.id;
+    res.json(
+      await authedCall((token) =>
+        api.updateChatbot(id, { remove_knowledge: true }, token),
+      ),
+    );
+  }),
+);
+
+app.post(
+  "/api/chatbots/:id/chat",
+  route(async (req, res) => {
+    if (USE_MOCK) {
+      res
+        .status(501)
+        .json({ error: "Chatbot API is not available in mock mode." });
+      return;
+    }
+    const id = req.params.id;
+    const messages = req.body?.messages;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: "'messages' must be a non-empty array." });
+      return;
+    }
+    res.json(
+      await authedCall((token) => api.chatWithChatbot(id, messages, token)),
+    );
   }),
 );
 
