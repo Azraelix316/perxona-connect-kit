@@ -96,21 +96,8 @@ that way unless you have a concrete reason to add a build step.
 Required (the server exits at startup if either is missing):
 
 - `PERXONA_API_BASE_URL` — region-specific Connect API base URL.
-- `PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD` — your Perxona Connect account credentials. The server signs in with
-  these; there is no browser login.
-
-### Account sign-up
-
-If you do not have a Connect account, create one through the Connect Auth API before running this sample:
-
-1. **Request a sign-up token** — `POST /api/v1/connect/auth/signup` with `{ "email": "you@example.com" }`. A token is sent to
-   the email address.
-2. **Confirm and set a password** — `POST /api/v1/connect/auth/confirm-signup` with `{ "token": "<from email>", "username":
-"your-username", "password": "your-password" }`. Returns `{ "access_token": "..." }` on success.
-3. Use the email and password you set as `PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD` in `.env`.
-
-Forgot your password? Use `POST /api/v1/connect/auth/forgot-password` with `{ "email": "..." }` to start the reset flow, then
-`POST /api/v1/connect/auth/reset-password` with the token from the email. See the Developer Handbook for full API details.
+- `PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD` — your Perxona service account. The server signs in with these; there is
+  no browser login.
 
 Optional: `PORT`; and `LLM_API_KEY` (+ `LLM_BASE_URL`, `LLM_MODEL`) to enable the chat panel. Keep secrets in `.env` and never
 commit it; update `.env.example` when you add a new variable.

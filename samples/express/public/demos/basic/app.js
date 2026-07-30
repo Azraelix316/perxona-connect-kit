@@ -237,11 +237,10 @@ async function fetchConnectToken() {
 /**
  * Build the PresentationTarget for presenter.initialize() from the currently
  * picked avatar/scene/voice <select> values.
- * @returns {{ type: "explicit", avatarId: string, sceneId: string, voiceId: (string|undefined) }}
+ * @returns {{ avatarId: string, sceneId: string, voiceId: (string|undefined) }}
  */
 function buildPresentationTarget() {
   return {
-    type: "explicit",
     avatarId: avatarSelect.value,
     sceneId: sceneSelect.value,
     voiceId: voiceSelect.value || undefined,
