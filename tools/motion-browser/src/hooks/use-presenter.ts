@@ -30,7 +30,7 @@ export interface UsePresenter {
   present: (content: string) => Promise<PresentationResult | undefined>;
   interruptPresentation: () => void;
   refreshConnectToken: (token: string) => void;
-  playMotion: (motionId: string) => Promise<void | undefined>;
+  playMotion: (motionId: string) => Promise<PresentationResult | undefined>;
 }
 
 /**

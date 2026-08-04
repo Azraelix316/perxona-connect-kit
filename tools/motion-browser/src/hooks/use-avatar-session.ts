@@ -38,7 +38,6 @@ export function useAvatarSession(
       const { connect_token } = await getConnectToken();
 
       await presenter.initialize(connect_token, {
-        type: "explicit",
         avatarId,
         sceneId,
         voiceId,

@@ -51,6 +51,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.7.0(jiti@1.21.7))
+      '@perxona/presenter-types':
+        specifier: latest
+        version: 0.1.0
       '@tanstack/react-query-devtools':
         specifier: ^5.101.2
         version: 5.101.2(@tanstack/react-query@5.101.2(react@19.2.7))(react@19.2.7)
@@ -289,6 +292,10 @@ packages:
 
   '@oxc-project/types@0.139.0':
     resolution: {integrity: sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw==}
+
+  '@perxona/presenter-types@0.1.0':
+    resolution: {integrity: sha512-5vwLbXO1DI2ZUHSVlY4D3e1C1IGOQS/A4zYntKfPqLtntquujFg5xKDNiuuL/vrkAOaFxHFO7+Iq5O8XikV+BA==}
+    engines: {node: '>=20.11.0'}
 
   '@radix-ui/number@1.1.2':
     resolution: {integrity: sha512-ceTwaxc4I5IOi97DgCotl3pqiyRGvffcc0oOsE2dQYaJOFIDsDt4VWG6xEbg1QePv9QWausCEIppud/tJ1wNig==}
@@ -1879,6 +1886,8 @@ snapshots:
       fastq: 1.20.1
 
   '@oxc-project/types@0.139.0': {}
+
+  '@perxona/presenter-types@0.1.0': {}
 
   '@radix-ui/number@1.1.2': {}
 

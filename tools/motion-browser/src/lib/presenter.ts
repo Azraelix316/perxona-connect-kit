@@ -1,41 +1,20 @@
 /**
  * Presenter engine bootstrap + typed handle for the `<sv-presenter>` web
  * component. The engine URL is resolved from the server (`/api/config`), so the
- * same build can target any CDN. See `docs/presenter.d.ts` in the sample for the
- * full IPresentationWidget contract.
+ * same build can target any CDN. The full `IPresentationWidget` contract comes
+ * from the `@perxona/presenter-types` npm package (see its `AGENTS.md`).
  */
+
+import type { IPresentationWidget } from "@perxona/presenter-types";
 
 import { getConfig } from "./api";
 
-export interface PresentationResult {
-  success: boolean;
-  code: string;
-  message?: string;
-}
+export type {
+  PresentationResult,
+  PresentationTarget,
+} from "@perxona/presenter-types";
 
-export type PresentationTarget = {
-  type: "explicit";
-  avatarId: string;
-  sceneId: string;
-  voiceId?: string;
-};
-
-/** Subset of IPresentationWidget used by this app. */
-export interface Presenter extends HTMLElement {
-  initialize(connectToken: string, target: PresentationTarget): Promise<void>;
-  present(content: string): Promise<PresentationResult>;
-  interruptPresentation(): void;
-  resumeAudioPlayback(): Promise<void>;
-  refreshConnectToken(token: string): void;
-  setListening(isListening: boolean): void;
-  setThinking(isThinking: boolean): void;
-  updateCameraFOV(fov: {
-    distance: number;
-    vertical: number;
-    horizontal: number;
-  }): void;
-  playMotion(motionId: string): Promise<void>;
-}
+export type Presenter = HTMLElement & IPresentationWidget;
 
 let enginePromise: Promise<void> | null = null;
 
