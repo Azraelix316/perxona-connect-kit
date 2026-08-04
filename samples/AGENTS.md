@@ -6,7 +6,7 @@ dependencies, its own docs, no shared build step or code between samples.
 
 ## Available Samples
 
-- [`express/`](express/) — an Express-based starter that shows the basic Connect flow. See
+- [`express/`](express/) — an Express-based sample with Basic, Starter, External LLM, and Chatbot demos. See
   [`express/README.md`](express/README.md) for setup and usage, and
   [`express/AGENTS.md`](express/AGENTS.md) for its architecture and conventions.
 
