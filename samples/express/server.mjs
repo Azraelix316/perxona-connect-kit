@@ -2,17 +2,54 @@ import express from "express";
 
 // ── Config ──────────────────────────────────────────────────
 
-const PORT = process.env.PORT || 8088;
+const PORT = process.env.PORT || 8083;
 const PERXONA_API_BASE_URL = process.env.PERXONA_API_BASE_URL;
 const USE_MOCK = process.env.USE_MOCK === "true";
 const PRESENTER_URL =
   process.env.PRESENTER_URL ||
   "https://cdn.perxona.ai/prod/latest/widget/entry/presenter.js";
+const DEMO_DEFAULTS = {
+  avatarId: process.env.DEMO_DEFAULT_AVATAR_ID || "avatar-1",
+  sceneId: process.env.DEMO_DEFAULT_SCENE_ID || "scene-1",
+  voiceId: process.env.DEMO_DEFAULT_VOICE_ID || "voice-1",
+  motionId: process.env.DEMO_DEFAULT_MOTION_ID || "motion-talking-1",
+};
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const LLM_API_KEY = process.env.LLM_API_KEY;
+const PRESENTER_TARGET = {
+  avatarId: process.env.DEMO_FIXED_AVATAR_ID,
+  sceneId: process.env.DEMO_FIXED_SCENE_ID,
+  voiceId: process.env.DEMO_FIXED_VOICE_ID,
+};
+const hasConfiguredPresenterTarget = Boolean(
+  PRESENTER_TARGET.avatarId ||
+    PRESENTER_TARGET.sceneId ||
+    PRESENTER_TARGET.voiceId,
+);
+const hasCompletePresenterTarget = Boolean(
+  PRESENTER_TARGET.avatarId && PRESENTER_TARGET.sceneId,
+);
+const fixedPresenterTarget = hasCompletePresenterTarget
+  ? {
+      avatarId: PRESENTER_TARGET.avatarId,
+      sceneId: PRESENTER_TARGET.sceneId,
+      ...(PRESENTER_TARGET.voiceId
+        ? { voiceId: PRESENTER_TARGET.voiceId }
+        : {}),
+    }
+  : null;
 // Server-side credentials for the one shared Connect API identity this sample
 // uses — see README "Auth model". Every browser hitting this server acts
 // through the same upstream account; there is no per-user login.
 const CONNECT_EMAIL = process.env.PERXONA_CONNECT_EMAIL;
 const CONNECT_PASSWORD = process.env.PERXONA_CONNECT_PASSWORD;
+
+if (hasConfiguredPresenterTarget && !hasCompletePresenterTarget) {
+  console.error(
+    "ERROR: DEMO_FIXED_AVATAR_ID and DEMO_FIXED_SCENE_ID must be configured together. DEMO_FIXED_VOICE_ID is optional for BYO-TTS.",
+  );
+  process.exit(1);
+}
 
 // Real credentials are only needed when actually calling the upstream API.
 // USE_MOCK=true skips callUpstream() entirely (see api selection below), so
@@ -158,7 +195,7 @@ const connectApi = {
   // Motions are a sub-resource of an avatar, not a top-level collection.
   async avatarMotions(avatarId, token) {
     const r = await callUpstream(
-      `/api/v1/connect/assets/avatars/${avatarId}/motions`,
+      `/api/v1/connect/assets/avatars/${encodeURIComponent(avatarId)}/motions`,
       {},
       token,
     );
@@ -411,7 +448,7 @@ app.get("/api/health", async (_req, res) => {
   });
 });
 
-// GET /api/config → { mock, chat, presenterUrl }. Static per-process flags fixed
+// GET /api/config → { mock, chat, presenterUrl, fixedTarget }. Static per-process flags fixed
 // at startup; no upstream probe, so the frontend can read them cheaply without
 // triggering a backend round-trip on every poll. `chat` reflects the presence of
 // LLM_API_KEY only — never the key itself. `presenterUrl` lets demo frontends
@@ -422,6 +459,8 @@ app.get("/api/config", (_req, res) => {
     mock: USE_MOCK,
     chat: Boolean(process.env.LLM_API_KEY),
     presenterUrl: PRESENTER_URL,
+    defaults: DEMO_DEFAULTS,
+    fixedTarget: fixedPresenterTarget,
   });
 });
 
@@ -505,6 +544,275 @@ app.get(
   route(async (req, res) => {
     const id = encodeURIComponent(req.params.id);
     res.json(await authedCall((token) => api.scene(id, token)));
+  }),
+);
+
+// POST /api/demo-script
+// Request: { avatarId: string, prompt: string }
+// Returns: { reply: string, script: string, motions: [{ id, name }] }
+// The server owns the motion catalog so an LLM cannot invent IDs supplied by
+// the browser. The returned Motion Markup is validated before it is exposed.
+const MOTION_TAG_CANDIDATE_RE = /\[MOTION\b[^\]]*(?:\]|$)/gi;
+const MOTION_TAG_RE = /^\[MOTION\s+([^\s:;\]]+):\d+(?:;([^\s:;\]]+):\d+)?\]$/i;
+
+function parseAndValidateMotionIds(script) {
+  const candidates = [...script.matchAll(MOTION_TAG_CANDIDATE_RE)].map(
+    ([match]) => match,
+  );
+  const malformedTags = candidates.filter((candidate) => {
+    const match = MOTION_TAG_RE.exec(candidate);
+    MOTION_TAG_RE.lastIndex = 0;
+    return !match;
+  });
+  if (malformedTags.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Generated script contains malformed Motion Markup: ${malformedTags.join(", ")}`,
+      ),
+      { status: 502 },
+    );
+  }
+  return candidates.flatMap((candidate) => {
+    const match = MOTION_TAG_RE.exec(candidate);
+    MOTION_TAG_RE.lastIndex = 0;
+    return [match[1], match[2]].filter(Boolean);
+  });
+}
+
+function validateDemoScript(script, motions) {
+  if (typeof script !== "string" || !script.trim()) {
+    throw Object.assign(
+      new Error("LLM response must include a non-empty script."),
+      {
+        status: 502,
+      },
+    );
+  }
+  if (script.length > 4000) {
+    throw Object.assign(new Error("Generated script is too long."), {
+      status: 502,
+    });
+  }
+
+  const motionIds = new Set(motions.map(({ id }) => id));
+  const unknownMotionIds = parseAndValidateMotionIds(script).filter(
+    (id) => !motionIds.has(id),
+  );
+  if (unknownMotionIds.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Generated script contains unknown motion IDs: ${[...new Set(unknownMotionIds)].join(", ")}`,
+      ),
+      { status: 502 },
+    );
+  }
+  return script.trim();
+}
+
+function parseJsonObject(text) {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  return JSON.parse(cleaned);
+}
+
+const DEMO_SCRIPT_JSON_SCHEMA = {
+  name: "presenter_script",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["reply", "script"],
+    properties: {
+      reply: { type: "string" },
+      script: { type: "string" },
+    },
+  },
+};
+
+function llmRequestConfig(messages, responseFormat) {
+  const model = process.env.LLM_MODEL ?? "gpt-4o-mini";
+  if (LLM_PROVIDER === "anthropic") {
+    const system = messages
+      .filter(({ role }) => role === "system")
+      .map(({ content }) => content)
+      .join("\n");
+    const userMessages = messages
+      .filter(({ role }) => role !== "system")
+      .map(({ role, content }) => ({ role, content }));
+    return {
+      url: `${process.env.LLM_BASE_URL ?? "https://api.anthropic.com"}/v1/messages`,
+      headers: {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": LLM_API_KEY,
+      },
+      body: {
+        model,
+        max_tokens: 1024,
+        ...(system ? { system } : {}),
+        messages: userMessages,
+        ...(responseFormat?.json_schema
+          ? {
+              output_config: {
+                format: {
+                  type: "json_schema",
+                  schema: responseFormat.json_schema.schema,
+                },
+              },
+            }
+          : {}),
+      },
+    };
+  }
+  return {
+    url: `${process.env.LLM_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${LLM_API_KEY}`,
+    },
+    body: { model, messages, response_format: responseFormat },
+  };
+}
+
+async function requestLlmCompletion(messages, responseFormat) {
+  if (LLM_PROVIDER !== "openai" && LLM_PROVIDER !== "anthropic") {
+    throw Object.assign(
+      new Error("LLM_PROVIDER must be either 'openai' or 'anthropic'."),
+      { status: 500 },
+    );
+  }
+  const request = llmRequestConfig(messages, responseFormat);
+  const response = await fetch(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: JSON.stringify(request.body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error("LLM request failed."), {
+      status: 502,
+      payload,
+    });
+  }
+  return payload;
+}
+
+function llmResponseText(payload) {
+  if (LLM_PROVIDER === "anthropic") {
+    return payload.content?.find(({ type }) => type === "text")?.text;
+  }
+  return payload.choices?.[0]?.message?.content;
+}
+
+function openAiCompatibleResponse(payload) {
+  if (LLM_PROVIDER === "openai") return payload;
+  return {
+    choices: [
+      {
+        message: { role: "assistant", content: llmResponseText(payload) ?? "" },
+      },
+    ],
+  };
+}
+
+function buildDemoScriptPrompt(prompt, motions) {
+  return [
+    'Return JSON only with exactly this shape: {"reply":"short explanation","script":"avatar dialogue with optional Motion Markup"}.',
+    "Create a short speaking script for an avatar. Use only motion IDs from the supplied catalog.",
+    "Motion syntax is [MOTION motion-id:1]. Never invent an ID. Do not put planning notes in script.",
+    `Available motions: ${JSON.stringify(motions)}`,
+  ].join("\n");
+}
+
+app.post(
+  "/api/demo-script",
+  route(async (req, res) => {
+    const avatarId = req.body?.avatarId;
+    const prompt = req.body?.prompt;
+    if (typeof avatarId !== "string" || !avatarId.trim()) {
+      res.status(400).json({ error: "'avatarId' is required." });
+      return;
+    }
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      res.status(400).json({ error: "'prompt' is required." });
+      return;
+    }
+    if (prompt.length > 2000) {
+      res
+        .status(400)
+        .json({ error: "'prompt' must be 2000 characters or fewer." });
+      return;
+    }
+
+    const page = await authedCall((token) =>
+      api.avatarMotions(avatarId, token),
+    );
+    const motions = (page.items ?? [])
+      .map((motion) => ({
+        id: motion.id ?? motion.motion_id,
+        name: motion.name,
+      }))
+      .filter(
+        ({ id, name }) => typeof id === "string" && typeof name === "string",
+      );
+    if (motions.length === 0) {
+      res
+        .status(422)
+        .json({ error: "The selected avatar has no usable motions." });
+      return;
+    }
+
+    let demoScriptResult;
+    if (USE_MOCK) {
+      const motion =
+        motions.find(({ id }) => id === DEMO_DEFAULTS.motionId) ?? motions[0];
+      demoScriptResult = {
+        reply:
+          "Created a deterministic demo script from the selected motion catalog.",
+        script: `Hello! [MOTION ${motion.id}:1] It is great to meet you.`,
+      };
+    } else {
+      if (!process.env.LLM_API_KEY) {
+        res.status(501).json({
+          error:
+            "LLM_API_KEY not configured. Set it in .env to enable script generation.",
+        });
+        return;
+      }
+      const payload = await requestLlmCompletion(
+        [
+          { role: "system", content: buildDemoScriptPrompt(prompt, motions) },
+          { role: "user", content: prompt.trim() },
+        ],
+        { type: "json_schema", json_schema: DEMO_SCRIPT_JSON_SCHEMA },
+      );
+      const content = llmResponseText(payload);
+      if (typeof content !== "string") {
+        throw Object.assign(
+          new Error("LLM response did not include message content."),
+          {
+            status: 502,
+          },
+        );
+      }
+      demoScriptResult = parseJsonObject(content);
+    }
+
+    if (
+      typeof demoScriptResult.reply !== "string" ||
+      !demoScriptResult.reply.trim()
+    ) {
+      throw Object.assign(
+        new Error("LLM response must include a non-empty reply."),
+        {
+          status: 502,
+        },
+      );
+    }
+    const script = validateDemoScript(demoScriptResult.script, motions);
+    res.json({ reply: demoScriptResult.reply.trim(), script, motions });
   }),
 );
 
@@ -754,21 +1062,12 @@ app.post("/api/chat", async (req, res) => {
     });
     return;
   }
-  const base = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
-  const model = process.env.LLM_MODEL ?? "gpt-4o-mini";
   try {
-    const r = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-      },
-      body: JSON.stringify({ model, messages }),
-    });
-    res.status(r.status).json(await r.json());
+    const payload = await requestLlmCompletion(messages);
+    res.json(openAiCompatibleResponse(payload));
   } catch (err) {
     res
-      .status(502)
+      .status(err.status ?? 502)
       .json({ error: "LLM upstream unreachable", message: String(err) });
   }
 });

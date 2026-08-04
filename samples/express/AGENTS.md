@@ -21,8 +21,10 @@ The server does two jobs:
    purely to populate the picker dropdowns; they normalize a couple of field names (`avatar_id`/`scene_id` → `id`) but otherwise
    pass upstream responses through unchanged.
 
-`/api/chat` is opt-in — it returns `501` until you set `LLM_API_KEY`, then forwards to an OpenAI-compatible `/chat/completions`
-endpoint. Ollama works via `LLM_BASE_URL`.
+`/api/chat` and `/api/demo-script` are opt-in — they return a disabled response until you set `LLM_API_KEY`. Use
+`LLM_PROVIDER=openai` for Chat Completions (including Ollama and other compatible endpoints), or
+`LLM_PROVIDER=anthropic` for Claude's Messages API. The browser-facing chat response remains OpenAI-shaped so both providers
+use the same frontend code.
 
 Chatbot CRUD routes let you create and manage Connect chatbots from the sample server:
 
@@ -61,8 +63,9 @@ avatar/voice resolved by `initialize()`. There is no server-side presentation-bu
 
 ### `docs/` — contract reference
 
-`openapi.yaml` and `presenter.d.ts` describe the Connect API and the presenter contract. Treat
-them as read-only reference — point your IDE at `presenter.d.ts` for autocomplete and JSDoc on presenter methods.
+`openapi.yaml` describes the Connect API — treat it as read-only reference. The presenter contract
+(`IPresentationWidget`) isn't in `docs/`; it's already installed as `@perxona/presenter-types` (see `package.json`) — point
+your IDE at that package for autocomplete and JSDoc on presenter methods.
 
 ## Project Structure
 
@@ -70,8 +73,7 @@ them as read-only reference — point your IDE at `presenter.d.ts` for autocompl
   longer builds presenter-ready payloads (`<sv-presenter>` resolves those itself against the Connect API using the token).
 - `public/` — the browser UI: `index.html` is a landing page listing demos; each demo (e.g. `demos/basic/`) has its own
   `index.html`, `style.css`, and `app.js` (plain ESM, no build step).
-- `docs/` — reference material: `openapi.yaml` (the Connect API), plus `presenter.d.ts` (the
-  presenter contract, handy for IDE autocomplete).
+- `docs/` — reference material: `openapi.yaml` (the Connect API).
 
 ## Getting Started
 
@@ -81,7 +83,7 @@ Requires Node `>=22` — run `nvm use` (reads `.nvmrc`) if you use nvm, or insta
 2. Fill in `PERXONA_API_BASE_URL`, `PERXONA_CONNECT_EMAIL`, and `PERXONA_CONNECT_PASSWORD` — ask your Perxona contact for the
    API URL and a service account.
 3. `npm install` — fails fast if your Node version is too old (`engine-strict` in `.npmrc`).
-4. `npm run dev` — runs with live reload (or `npm start` without watch). The app serves on the port from your `.env` (`8088` by
+4. `npm run dev` — runs with live reload (or `npm start` without watch). The app serves on the port from your `.env` (`8083` by
    default). If your Node is too old or you skipped step 1, `dev`/`start` fail fast with an actionable message instead of a
    cryptic error.
 
@@ -99,5 +101,5 @@ Required (the server exits at startup if either is missing):
 - `PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD` — your Perxona service account. The server signs in with these; there is
   no browser login.
 
-Optional: `PORT`; and `LLM_API_KEY` (+ `LLM_BASE_URL`, `LLM_MODEL`) to enable the chat panel. Keep secrets in `.env` and never
-commit it; update `.env.example` when you add a new variable.
+Optional: `PORT`; and `LLM_API_KEY` (+ `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`) to enable the chat panel. Keep secrets in
+`.env` and never commit it; update `.env.example` when you add a new variable.

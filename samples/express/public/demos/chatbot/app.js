@@ -99,7 +99,7 @@ const debugPanel = document.getElementById("debug-panel");
 const debugLog = document.getElementById("debug-log");
 const debugClearBtn = document.getElementById("debug-clear-btn");
 
-/** @type {HTMLElement & import('../../../docs/presenter.d.ts').IPresentationWidget} */
+/** @type {HTMLElement & import('@perxona/presenter-types').IPresentationWidget} */
 const presenter = document.querySelector("sv-presenter");
 
 // ── App state ──────────────────────────────────────────────────────────────

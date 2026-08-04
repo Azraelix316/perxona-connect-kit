@@ -22,6 +22,11 @@ body {
   color: #e8e8f0;
 }
 
+/* Keep the DOM hidden attribute authoritative when component styles set display. */
+[hidden] {
+  display: none !important;
+}
+
 /* ── Tokens ────────────────────────────────────────────────────────────── */
 
 :root {

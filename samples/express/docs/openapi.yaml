@@ -1748,6 +1748,7 @@ components:
             speech_format is returned as unknown.
         message:
           type: string
+          maxLength: 2048
           minLength: 1
           title: Message
           description: Text that the presenter should speak.

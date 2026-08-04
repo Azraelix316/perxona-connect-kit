@@ -39,6 +39,9 @@ const appConfig = await request("/api/config");
 // the engine script, enabling Launch, allowing playback) is disabled whenever
 // the server reports mock mode.
 const isPresenterLaunchDisabled = appConfig.mock;
+const fixedTarget = appConfig.fixedTarget;
+const hasFixedTarget = Boolean(fixedTarget);
+const isFixedByoTtsTarget = hasFixedTarget && !fixedTarget.voiceId;
 
 // Block the rest of this module until the presenter engine is loaded, so
 // <sv-presenter> is upgraded before any code below can call its methods.
@@ -65,6 +68,7 @@ const stopBtn = document.getElementById("stop-btn");
 const audioForm = document.getElementById("audio-form");
 const audioFileInput = document.getElementById("audio-file");
 const audioTextInput = document.getElementById("audio-text");
+const presetGrid = perfControls.querySelector(".preset-grid");
 
 // Chat panel (opt-in)
 const chatPanel = document.getElementById("chat-panel");
@@ -81,7 +85,7 @@ const chatHistory = [];
 // internally via the Connect API. initBtn's click handler reads the picked
 // avatarId/sceneId/voiceId straight from the <select>s and passes them through.
 
-/** @type {HTMLElement & import('../../../docs/presenter.d.ts').IPresentationWidget} */
+/** @type {HTMLElement & import('@perxona/presenter-types').IPresentationWidget} */
 const presenter = document.querySelector("sv-presenter");
 
 // ── API helper ─────────────────────────────────────────────────────────────
@@ -158,7 +162,25 @@ function updateAssetIcon(img, items, id, thumbnailKey) {
 
 function updateInitBtn() {
   initBtn.disabled =
-    isPresenterLaunchDisabled || !avatarSelect.value || !sceneSelect.value;
+    isPresenterLaunchDisabled ||
+    (!hasFixedTarget && (!avatarSelect.value || !sceneSelect.value));
+}
+
+function applyFixedTargetMode() {
+  if (!hasFixedTarget) return;
+
+  avatarSelect.closest(".field-group")?.toggleAttribute("hidden", true);
+  initBtn.hidden = true;
+  avatarIcon.hidden = true;
+  sceneIcon.hidden = true;
+  updateInitBtn();
+
+  // The default placeholder tells the visitor to pick an avatar/scene and click
+  // Launch — neither applies here: the picker is hidden above, and the bootstrap
+  // below auto-clicks initBtn for a fixed target, so there's nothing to select or
+  // click.
+  stagePlaceholder.querySelector("p").textContent =
+    "Fixed target configured — launching automatically…";
 }
 
 avatarSelect.addEventListener("change", () => {
@@ -171,6 +193,16 @@ sceneSelect.addEventListener("change", () => {
 });
 
 async function loadCatalog() {
+  if (hasFixedTarget) {
+    applyFixedTargetMode();
+    setStatus(
+      isPresenterLaunchDisabled
+        ? "Configure live credentials to launch the presenter."
+        : "",
+    );
+    return;
+  }
+
   setStatus("Loading catalog…");
   try {
     const [{ items: avatarList }, { items: sceneList }, { items: voiceList }] =
@@ -218,6 +250,11 @@ presenter.addEventListener("PRESENTER_STATUS", (e) => {
     stagePlaceholder.hidden = true;
     presenter.hidden = false;
     perfControls.hidden = false;
+    if (isFixedByoTtsTarget) {
+      presetGrid.hidden = true;
+      sayForm.hidden = true;
+      setStatus("✓ Ready — BYO-TTS: provide audio below.");
+    }
   }
 });
 
@@ -240,6 +277,8 @@ async function fetchConnectToken() {
  * @returns {{ avatarId: string, sceneId: string, voiceId: (string|undefined) }}
  */
 function buildPresentationTarget() {
+  if (hasFixedTarget) return fixedTarget;
+
   return {
     avatarId: avatarSelect.value,
     sceneId: sceneSelect.value,
@@ -260,7 +299,9 @@ initBtn.addEventListener("click", async () => {
     // resumeAudioPlayback must be called from a direct user gesture to unlock
     // the browser's autoplay policy before the presenter starts audio. It
     // returns a Promise that resolves once the audio context has resumed.
-    await presenter.resumeAudioPlayback?.();
+    if (!hasFixedTarget) {
+      await presenter.resumeAudioPlayback?.();
+    }
 
     const connectToken = await fetchConnectToken();
 
@@ -307,7 +348,12 @@ function reportPlaybackResult(result) {
 async function speak(message) {
   const text = message.trim();
   if (!text) return;
+  if (isFixedByoTtsTarget) {
+    setStatus("BYO-TTS target: use Present with audio below.");
+    return;
+  }
   try {
+    await presenter.resumeAudioPlayback?.();
     const result = await presenter.present(text);
     reportPlaybackResult(result);
   } catch (err) {
@@ -325,6 +371,7 @@ async function speak(message) {
 async function speakWithAudio(file, text) {
   if (!file || !text.trim()) return;
   try {
+    await presenter.resumeAudioPlayback?.();
     const arrayBuffer = await file.arrayBuffer();
     const result = await presenter.presentWithAudio(arrayBuffer, text.trim());
     reportPlaybackResult(result);
@@ -412,3 +459,8 @@ function setStatus(text) {
 // engine is ready. Mock mode loads catalog data only.
 await loadCatalog();
 updateChatPanel();
+
+if (hasFixedTarget && !isPresenterLaunchDisabled) {
+  applyFixedTargetMode();
+  initBtn.click();
+}

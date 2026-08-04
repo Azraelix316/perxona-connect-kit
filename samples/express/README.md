@@ -19,11 +19,11 @@ cp .env.example .env     # then open .env and set the required values:
                          #   PERXONA_CONNECT_EMAIL     → your Perxona service account email
                          #   PERXONA_CONNECT_PASSWORD  → your Perxona service account password
 npm install
-npm run dev              # open the URL it prints (default http://localhost:8088)
+npm run dev              # open the URL it prints (default http://localhost:8083)
 ```
 
-Pick an avatar / scene / voice, click **Launch** — the avatar speaks. The server signs in with its own credentials on the first
-request; there's no login screen.
+Pick an avatar / scene / voice, click **Enable Audio** — the avatar speaks. The server signs in with its own credentials on
+the first request; there's no login screen.
 
 ---
 
@@ -65,18 +65,20 @@ CDN — the component talks to the Connect API directly using that token. Togeth
    rest directly against the Connect API.
 4. Make the avatar speak — one call, the presenter handles synthesis and motion playback.
 
+Start with **Basic** for catalog selection and speech playback. **Starter** is the smallest complete Presenter integration,
+including motion preview and configurable defaults. **External LLM** generates a structured script from the selected avatar's
+real motion catalog, and **Chatbot** demonstrates chatbot CRUD and multi-turn conversations.
+
 ```text
 .
 ├── server.mjs        # Express backend — proxies catalog reads and mints the Connect bearer token
 ├── public/
 │   ├── index.html    # Landing page listing demos
-│   └── demos/basic/  # This demo's UI — index.html, style.css, app.js (plain ESM, no build step)
-└── docs/             # Reference — openapi.yaml + presenter.d.ts
+│   └── demos/        # basic, starter, external-llm, and chatbot demo UIs
+└── docs/             # Reference — openapi.yaml
 ```
 
-`docs/` is reference material for your IDE: `openapi.yaml` describes the Connect API, and
-`presenter.d.ts` describes the presenter contract (point your editor at `presenter.d.ts` for autocomplete and JSDoc on presenter
-methods).
+`docs/openapi.yaml` describes the Connect API — a reference for the underlying REST endpoints (open it in Swagger UI or Postman to browse them). 
 
 ### Auth model
 
@@ -115,19 +117,35 @@ npm install              # 2. install dependencies
 
 Then open `.env` and fill in the values:
 
-| Variable                   | Required | Description                                                                                                                                                                                     |
-| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PERXONA_API_BASE_URL`     | ✅       | Region-specific Connect API base URL (e.g. `https://api.perxona.ai/eu`). From your Perxona contact.                                                                                             |
-| `PERXONA_CONNECT_EMAIL`    | ✅       | Perxona service account email. The server signs in with this — no browser login.                                                                                                                |
-| `PERXONA_CONNECT_PASSWORD` | ✅       | Perxona service account password.                                                                                                                                                               |
-| `PORT`                     | —        | Port the app serves on (default `8088`).                                                                                                                                                        |
-| `PRESENTER_URL`            | —        | URL of the Perxona presenter engine on the CDN. Defaults to the production engine. Override only if your Perxona contact provides a specific URL.                                               |
-| `LLM_API_KEY`              | —        | Set (with optional `LLM_BASE_URL`, `LLM_MODEL`) to enable the chat panel. Any OpenAI-compatible endpoint works, including a local Ollama via `LLM_BASE_URL`. Leave blank to keep chat disabled. |
+| Variable                   | Required | Description                                                                                                                                       |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERXONA_API_BASE_URL`     | ✅       | Region-specific Connect API base URL (e.g. `https://api.perxona.ai/eu`). From your Perxona contact.                                               |
+| `PERXONA_CONNECT_EMAIL`    | ✅       | Perxona service account email. The server signs in with this — no browser login.                                                                  |
+| `PERXONA_CONNECT_PASSWORD` | ✅       | Perxona service account password.                                                                                                                 |
+| `PORT`                     | —        | Port the app serves on (default `8083`).                                                                                                          |
+| `PRESENTER_URL`            | —        | URL of the Perxona presenter engine on the CDN. Defaults to the production engine. Override only if your Perxona contact provides a specific URL. |
+| `DEMO_DEFAULT_AVATAR_ID`   | —        | Default avatar selected by the Starter demo.                                                                                                      |
+| `DEMO_DEFAULT_SCENE_ID`    | —        | Default scene selected by the Starter demo.                                                                                                       |
+| `DEMO_DEFAULT_VOICE_ID`    | —        | Default voice selected by the Starter demo.                                                                                                       |
+| `DEMO_DEFAULT_MOTION_ID`   | —        | Default motion highlighted by the Starter demo and used by the mock script route.                                                                 |
+| `DEMO_FIXED_AVATAR_ID`     | —        | Optional fixed avatar target. Set this together with `DEMO_FIXED_SCENE_ID` to skip catalog selection.                                             |
+| `DEMO_FIXED_SCENE_ID`      | —        | Optional fixed scene target. Must be set together with `DEMO_FIXED_AVATAR_ID`.                                                                    |
+| `DEMO_FIXED_VOICE_ID`      | —        | Optional fixed voice target. Leave blank for BYO-TTS; use `presentWithAudio()` instead of `present()`.                                            |
+| `LLM_API_KEY`              | —        | API key for the selected provider. Leave blank to keep chat and External LLM generation disabled.                                                 |
+| `LLM_PROVIDER`             | —        | `openai` (default) for Chat Completions, or `anthropic` for Claude Messages API.                                                                  |
+| `LLM_BASE_URL`             | —        | Provider base URL. OpenAI default: `https://api.openai.com/v1`; Anthropic default: `https://api.anthropic.com`.                                   |
+| `LLM_MODEL`                | —        | Provider model, for example `gpt-4o-mini` or `claude-sonnet-4-20250514`.                                                                          |
 
 The server **exits at startup** if `PERXONA_API_BASE_URL`, `PERXONA_CONNECT_EMAIL`, or `PERXONA_CONNECT_PASSWORD` is missing. If
 `.env` itself doesn't exist yet (you skipped step 1), `npm run dev`/`npm start` fail immediately with a reminder to run
 `cp .env.example .env`. The same commands also fail fast with an upgrade hint if your Node version doesn't meet the `>=22`
 requirement. Keep `.env` out of version control; update `.env.example` when you add a new variable.
+
+When `DEMO_FIXED_AVATAR_ID` and `DEMO_FIXED_SCENE_ID` are configured, the basic demo initializes that target directly and hides
+the avatar, scene, and voice catalog pickers. `DEMO_FIXED_VOICE_ID` is optional; leaving it blank selects BYO-TTS behavior,
+where the caller supplies audio through `presentWithAudio()`. If none are configured, the normal catalog selection flow remains
+available.
+Partial avatar/scene configuration is rejected at server startup.
 
 ---
 
@@ -139,7 +157,7 @@ npm run dev     # start with live reload (node --watch)
 npm start       # start without watch
 ```
 
-The terminal prints the local URL (e.g. `http://localhost:8088`), the API it targets, and whether it's in live or mock mode.
+The terminal prints the local URL (e.g. `http://localhost:8083`), the API it targets, and whether it's in live or mock mode.
 In live mode, open that URL, choose an avatar / scene / voice, and click **Launch** — the avatar appears and is ready to speak.
 Mock mode supports catalog browsing only.
 
@@ -153,15 +171,17 @@ the Connect API.
 
 ### Backend API routes
 
-| Method & path                                                        | Purpose                                                                                                       |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `GET /api/health`                                                    | Liveness + diagnostics (`upstream` reachability; reads `mock` in mock mode). Probes the backend on each call. |
-| `GET /api/config`                                                    | Static per-process flags (`mock`, `chat` availability, `presenterUrl`). No upstream probe.                    |
-| `GET /api/connect-token`                                             | Mint/reuse the shared Connect bearer JWT — pass straight into `presenter.initialize()`.                       |
-| `GET /api/voices`                                                    | List voices.                                                                                                  |
-| `GET /api/avatars` · `/api/avatars/:id` · `/api/avatars/:id/motions` | List / detail / motions.                                                                                      |
-| `GET /api/scenes` · `/api/scenes/:id`                                | List / detail.                                                                                                |
-| `POST /api/chat`                                                     | Opt-in LLM chat. Returns `501` until `LLM_API_KEY` is set.                                                    |
+| Method & path                                                        | Purpose                                                                                                            |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/health`                                                    | Liveness + diagnostics (`upstream` reachability; reads `mock` in mock mode). Probes the backend on each call.      |
+| `GET /api/config`                                                    | Static per-process flags (`mock`, `chat`, `presenterUrl`) plus Starter defaults. No upstream probe.                |
+| `GET /api/connect-token`                                             | Mint/reuse the shared Connect bearer JWT — pass straight into `presenter.initialize()`.                            |
+| `GET /api/voices`                                                    | List voices.                                                                                                       |
+| `GET /api/avatars` · `/api/avatars/:id` · `/api/avatars/:id/motions` | List / detail / motions.                                                                                           |
+| `GET /api/scenes` · `/api/scenes/:id`                                | List / detail.                                                                                                     |
+| `POST /api/chat`                                                     | Opt-in LLM chat. Returns `501` until `LLM_API_KEY` is set.                                                         |
+| `POST /api/demo-script`                                              | Generate a structured script grounded in the selected avatar's motion catalog; validate Motion Markup server-side. |
+| `/api/chatbots*`                                                     | Chatbot CRUD, knowledge upload, and multi-turn chat.                                                               |
 
 ### SDK: the `<sv-presenter>` Web Component
 
@@ -177,7 +197,7 @@ The presenter is loaded from Perxona's CDN. `app.js` fetches `GET /api/config` o
 | Member                                       | Role                                                                                           |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `presenter.initialize(connectToken, target)` | Boot the presenter: resolves `target` and mints its own speech token against the Connect API.  |
-| `presenter.resumeAudioPlayback()`            | Unlock browser autoplay. **Must run from a direct user gesture** (the Launch click).           |
+| `presenter.resumeAudioPlayback()`            | Unlock browser autoplay. **Must run from a direct user gesture** (the Enable Audio click).     |
 | `presenter.present(content)`                 | Synthesize `content` into speech and play it back on the avatar.                               |
 | `presenter.presentWithAudio(audio, content)` | Play back a supplied speech audio buffer with `content` as the transcript for the performance. |
 | `presenter.playMotion(motionId)`             | Resolve, preload, and play one body motion independently from the speech queue.                |
@@ -187,7 +207,7 @@ The presenter is loaded from Perxona's CDN. `app.js` fetches `GET /api/config` o
 ### Initialization (the basic flow)
 
 ```js
-// 1. Unlock audio from the user's Launch click (autoplay policy).
+// 1. Unlock audio from the user's Enable Audio click (autoplay policy).
 await presenter.resumeAudioPlayback();
 
 // 2. Fetch the Connect bearer token this server minted.
@@ -232,11 +252,11 @@ The sample handles the common failure paths so you can see the patterns:
 
 This README keeps shapes short on purpose. When you need exact fields, go to the source of truth:
 
-| What                                                                                                | Where                                            |
-| --------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Presenter contract (`IPresentationWidget`, `PresentationTarget`, `PresentationResult`, event types) | [`docs/presenter.d.ts`](docs/presenter.d.ts)     |
-| Perxona Connect API (the service the presenter and this proxy call)                                 | [`docs/openapi.yaml`](docs/openapi.yaml)         |
-| Local `/api/*` proxy (request body · response shape · status codes)                                 | the route handlers in [`server.mjs`](server.mjs) |
+| What                                                                                                | Where                                               |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Presenter contract (`IPresentationWidget`, `PresentationTarget`, `PresentationResult`, event types) | `@perxona/presenter-types` (npm package, installed) |
+| Perxona Connect API (the service the presenter and this proxy call)                                 | [`docs/openapi.yaml`](docs/openapi.yaml)            |
+| Local `/api/*` proxy (request body · response shape · status codes)                                 | the route handlers in [`server.mjs`](server.mjs)    |
 
 The local proxy intentionally **reshapes** a few responses, so don't assume `/api/*` matches `openapi.yaml` one-to-one:
 
@@ -259,9 +279,9 @@ The local proxy intentionally **reshapes** a few responses, so don't assume `/ap
 You've integrated the kit correctly when:
 
 1. `npm run dev` starts without errors and prints the local URL.
-2. `GET /api/health` returns `{ "status": "ok", ... }` — check it with `curl http://localhost:8088/api/health`.
+2. `GET /api/health` returns `{ "status": "ok", ... }` — check it with `curl http://localhost:8083/api/health`.
 3. The avatar / scene / voice dropdowns populate from the catalog with no sign-in step.
-4. After **Launch**, the status reaches `✓ Ready` and the avatar renders on the stage.
+4. After **Enable Audio**, the status reaches `✓ Ready` and the avatar renders on the stage.
 5. A preset button (or the text box) makes the avatar speak.
 
 ---
@@ -278,7 +298,8 @@ You've integrated the kit correctly when:
   Connect API rejects the token it's using; this sample doesn't listen for it or call `presenter.refreshConnectToken()` in
   response, so a long-running session can go stale once the shared `connect_token` expires — reload the page to mint a fresh
   one via `GET /api/connect-token`.
-- **Chat is opt-in.** The chat panel stays disabled (and `POST /api/chat` returns `501`) until you set `LLM_API_KEY`.
+- **Chat is opt-in.** The chat panel stays disabled (and `POST /api/chat` returns `501`) until you set `LLM_API_KEY`. Use
+  `LLM_PROVIDER=openai` for Chat Completions or `LLM_PROVIDER=anthropic` for Claude's Messages API.
 - **Minimal UI.** Plain vanilla JS with no framework or build step — intentionally, so the integration is easy to read.
 
 ---
@@ -293,14 +314,14 @@ Run `cp .env.example .env` and fill in the API base URL and your Perxona service
 wrong, or `PERXONA_API_BASE_URL` points at the wrong region. Confirm both with your Perxona contact. Check `GET /api/health` —
 the `upstream` field shows whether the API is reachable.
 
-**The avatar never appears, or there's no sound.** Audio playback must be unlocked by a real user gesture. Make sure you click
-**Launch** (which calls `resumeAudioPlayback()`); audio won't start from page load alone. Watch for `PRESENTER_STATUS` to reach
-`Ready`, and check the browser console for SDK errors.
+**The avatar never appears, or there's no sound.** Audio playback must be unlocked by a real user gesture. Make sure you
+click **Enable Audio** (which calls `resumeAudioPlayback()`); audio won't start from page load alone. Watch for
+`PRESENTER_STATUS` to reach `Ready`, and check the browser console for SDK errors.
 
-**Chat returns `501 LLM_API_KEY not configured`.** Chat is disabled by default. Set `LLM_API_KEY` (and optionally
-`LLM_BASE_URL`, `LLM_MODEL`) in `.env`, then restart. A local Ollama works via `LLM_BASE_URL=http://localhost:11434/v1`.
+**Chat returns `501 LLM_API_KEY not configured`.** Chat is disabled by default. Set `LLM_API_KEY`, choose
+`LLM_PROVIDER=openai` or `LLM_PROVIDER=anthropic`, and configure `LLM_MODEL` in `.env`, then restart.
 
-**The page won't load / port already in use.** Another process is using the port. Change `PORT` in `.env` (default `8088`) and
+**The page won't load / port already in use.** Another process is using the port. Change `PORT` in `.env` (default `8083`) and
 restart.
 
 **`npm install` or `npm run dev`/`npm start` fails with an "ERROR: Node ... is too old" message.** You're on an older Node. This
@@ -319,7 +340,8 @@ Once the happy path runs, make it yours:
 
 - **Customize the UI.** Replace the preset buttons and layout in `public/demos/basic/app.js` and `public/demos/basic/index.html`
   with your own.
-- **Get editor autocomplete.** Point your IDE at `docs/presenter.d.ts` for types and JSDoc on the presenter API.
+- **Get editor autocomplete.** `@perxona/presenter-types` is already installed — your IDE should pick up types and JSDoc on
+  the presenter API automatically.
 - **Enable chat.** Set `LLM_API_KEY` (and optionally `LLM_BASE_URL`, `LLM_MODEL`) to turn on the chat panel.
 
 ---

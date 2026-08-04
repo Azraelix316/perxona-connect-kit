@@ -42,7 +42,7 @@ npm start
 # or: node server.mjs
 ```
 
-Then open: <http://localhost:8088/demos/chatbot/>
+Then open: <http://localhost:8083/demos/chatbot/>
 
 ---
 
@@ -207,4 +207,4 @@ await presenter.initialize(connectToken, {
 });
 ```
 
-See `presenter.d.ts` → `PresentationTarget` for the current implementation status.
+See `@perxona/presenter-types` → `PresentationTarget` for the current implementation status.
