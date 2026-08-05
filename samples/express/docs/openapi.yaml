@@ -1752,6 +1752,20 @@ components:
           minLength: 1
           title: Message
           description: Text that the presenter should speak.
+        emotion:
+          anyOf:
+            - $ref: '#/components/schemas/EmotionCategory'
+            - type: 'null'
+          description: >-
+            Emotional tone of the message. Drives facial-expression selection for the suggested motions; when both
+            emotion and intensity are omitted, no facial expression is attached.
+        intensity:
+          anyOf:
+            - $ref: '#/components/schemas/IntensityCategory'
+            - type: 'null'
+          description: >-
+            Intensity of the emotional tone. Drives facial-expression selection for the suggested motions; when both
+            emotion and intensity are omitted, no facial expression is attached.
       type: object
       required:
         - avatar_id
@@ -1951,6 +1965,23 @@ components:
         - email
       title: EmailRequest
       description: The validated email address
+    EmotionCategory:
+      type: string
+      enum:
+        - joy
+        - excitement
+        - admiration
+        - caring
+        - gratitude
+        - sadness
+        - disappointment
+        - annoyance
+        - embarrassment
+        - curiosity
+        - surprise
+        - realization
+        - confusion
+      title: EmotionCategory
     Error:
       properties:
         code:
@@ -2139,6 +2170,13 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
+    IntensityCategory:
+      type: string
+      enum:
+        - low
+        - neutral
+        - high
+      title: IntensityCategory
     Language:
       type: string
       enum:

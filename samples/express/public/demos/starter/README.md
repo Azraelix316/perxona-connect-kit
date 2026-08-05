@@ -23,7 +23,6 @@ const { connect_token } = await fetch("/api/connect-token").then((response) =>
   response.json(),
 );
 await presenter.initialize(connect_token, {
-  type: "explicit",
   avatarId,
   sceneId,
   voiceId,

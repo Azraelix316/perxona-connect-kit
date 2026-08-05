@@ -304,7 +304,6 @@ initBtn.addEventListener("click", async () => {
     const connectToken = await fetchConnectToken();
     setStatus("Initializing…");
     await presenter.initialize(connectToken, {
-      type: "explicit",
       avatarId: avatarSelect.value,
       sceneId: sceneSelect.value,
       voiceId: voiceSelect.value || undefined,

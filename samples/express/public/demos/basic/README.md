@@ -63,7 +63,7 @@ Click **Launch**. The page:
 
 1. Calls `presenter.resumeAudioPlayback()` to unlock the browser's autoplay policy (this must happen inside the click handler).
 2. Fetches a Connect bearer token from `GET /api/connect-token`.
-3. Calls `presenter.initialize(connectToken, { type: "explicit", avatarId, sceneId, voiceId })` — the widget resolves the target and mints its own speech token directly against the Connect API.
+3. Calls `presenter.initialize(connectToken, { avatarId, sceneId, voiceId })` — the widget resolves the target and mints its own speech token directly against the Connect API.
 4. Waits for the `PRESENTER_STATUS → Ready` event, then reveals the stage and the playback controls.
 
 ### Step 3 — Make the Avatar Speak

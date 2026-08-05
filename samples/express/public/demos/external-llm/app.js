@@ -22,6 +22,7 @@ const scriptInput = document.querySelector("#script");
 const runBtn = document.querySelector("#run-btn");
 const resultEl = document.querySelector("#result");
 const status = document.querySelector("#status");
+/** @type {HTMLElement & import('@perxona/presenter-types').IPresentationWidget} */
 const presenter = document.querySelector("sv-presenter");
 const stagePlaceholder = document.querySelector("#stage-placeholder");
 let presenterReady = false;
@@ -134,7 +135,6 @@ async function initializePresenterForLatestTarget() {
       setStatus("Preparing Presenter with the configured target…");
       const { connect_token: token } = await requestJson("/api/connect-token");
       await presenter.initialize(token, {
-        type: "explicit",
         ...target,
       });
       initializedTargetRevision = targetRevision;

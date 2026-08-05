@@ -198,13 +198,7 @@ To remove the knowledge file, click the **Remove** button — the server sends `
 
 ### Use a Chatbot ID in `initialize()`
 
-Once the Connect chatbot backend supports target resolution, you can pass the chatbot ID directly to `presenter.initialize()`:
-
-```js
-await presenter.initialize(connectToken, {
-  type: "chatbot",
-  chatbotId: activeBotId,
-});
-```
-
-See `@perxona/presenter-types` → `PresentationTarget` for the current implementation status.
+Not yet supported: `PresentationTarget` currently only accepts an explicit `avatarId` / `sceneId` /
+`voiceId?` combination (see `@perxona/presenter-types`). Resolving a target directly from a chatbot
+ID is a possible future addition, not the current contract — this demo resolves `avatarId` /
+`sceneId` itself (see `app.js`) and passes those to `initialize()`.

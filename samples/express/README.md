@@ -1,7 +1,7 @@
 # Perxona Connect Kit
 
 A minimal, self-contained sample that integrates the **Perxona Connect API** (Presentation Service) and the `<sv-presenter>`
-avatar Web Component (Presentation SDK). Pick an avatar, scene, and voice, and make the avatar speak — then use it as the
+avatar Web Component (Presenter SDK). Pick an avatar, scene, and voice, and make the avatar speak — then use it as the
 starting point for your own project.
 
 > This kit is built for a fast first run, not to cover the whole SDK or to be production-ready. The goal is to get you from
@@ -15,14 +15,17 @@ Need Node `>=22`. Then:
 
 ```bash
 cp .env.example .env     # then open .env and set the required values:
-                         #   PERXONA_API_BASE_URL      → ask your Perxona contact
-                         #   PERXONA_CONNECT_EMAIL     → your Perxona service account email
-                         #   PERXONA_CONNECT_PASSWORD  → your Perxona service account password
+                         #   PERXONA_API_BASE_URL      → e.g. https://console.perxona.ai/asia
+                         #   PERXONA_CONNECT_EMAIL     → your email (Connect Sign Up API)
+                         #   PERXONA_CONNECT_PASSWORD  → password set by Connect Confirm Sign Up API
 npm install
 npm run dev              # open the URL it prints (default http://localhost:8083)
 ```
 
-Pick an avatar / scene / voice, click **Enable Audio** — the avatar speaks. The server signs in with its own credentials on
+Create these credentials with `POST /api/v1/connect/auth/signup` followed by
+`POST /api/v1/connect/auth/confirm-signup`, not the general console sign-up API.
+
+Pick an avatar / scene / voice, click **Launch** — the avatar speaks. The server signs in with its own credentials on
 the first request; there's no login screen.
 
 ---
@@ -36,10 +39,12 @@ the first request; there's no login screen.
     - [Auth model](#auth-model)
   - [2. Installation](#2-installation)
     - [Prerequisites](#prerequisites)
+    - [Getting a Connect account](#getting-a-connect-account)
     - [Steps](#steps)
   - [3. Running](#3-running)
   - [4. API \& SDK integration](#4-api--sdk-integration)
     - [Backend API routes](#backend-api-routes)
+    - [Direct Connect presentation API](#direct-connect-presentation-api)
     - [SDK: the `<sv-presenter>` Web Component](#sdk-the-sv-presenter-web-component)
     - [Initialization (the basic flow)](#initialization-the-basic-flow)
     - [Error handling](#error-handling)
@@ -78,7 +83,8 @@ real motion catalog, and **Chatbot** demonstrates chatbot CRUD and multi-turn co
 └── docs/             # Reference — openapi.yaml
 ```
 
-`docs/openapi.yaml` describes the Connect API — a reference for the underlying REST endpoints (open it in Swagger UI or Postman to browse them). 
+`docs/openapi.yaml` describes the Connect API — a reference for the underlying REST endpoints (open it in Swagger UI or
+Postman to browse them).
 
 ### Auth model
 
@@ -103,10 +109,62 @@ for its lifetime — wiring `refreshConnectToken`/`CONNECT_TOKEN_EXPIRED` for lo
 
 - **Node `>=22`** — check with `node --version`. Using nvm? Run `nvm use` in this directory (reads `.nvmrc`). If your Node is
   too old, `npm install` refuses to run and `npm run dev`/`npm start` fail with a message telling you what to upgrade to.
-- **Perxona service account credentials** (email + password) with access to the Connect API — ask your Perxona contact. The same
-  person provides the region-specific API base URL. The server uses these credentials directly — there is no browser sign-in.
-- The credentials need permission to read avatars, scenes, and voices, and to mint TTS tokens and presentations \u2014 the browser
+- **Perxona Connect account** (email + password) — the server uses these credentials to authenticate on your behalf. See
+  [Getting a Connect account](#getting-a-connect-account) below if you do not have one yet.
+- **Region-specific API base URL** — use `https://console.perxona.ai/asia` (or your region's equivalent).
+- The account needs permission to read avatars, scenes, and voices, and to mint TTS tokens and presentations — the browser
   calls all of those directly against the Connect API once it has the `connect_token` (see ["Auth model"](#auth-model)).
+
+### Getting a Connect account
+
+If you do not have a Connect account yet, you can create one through the two-step sign-up flow:
+
+**Step 1 — request the sign-up token** (rate-limited: 10 calls / 60 seconds):
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "you@example.com" }'
+```
+
+A sign-up token is sent to that email address.
+
+**Step 2 — confirm your sign-up and set a password** (rate-limited: 10 calls / 60 seconds):
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/confirm-signup" \
+  -H "Content-Type: application/json" \
+  -d '{ "token": "<token from email>", "username": "you@example.com", "password": "your-password" }'
+```
+
+> `username` must be the **same email address** you used in step 1.
+
+A successful response returns `{ "access_token": "..." }` — your account is ready. Use the email and password you set in `.env`
+for `PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD`.
+
+Already have an account? You can verify your credentials with a direct login call:
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "you@example.com", "password": "your-password" }'
+```
+
+If you forget your password, start the reset flow:
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/forgot-password" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "you@example.com" }'
+```
+
+Then complete the reset with the token sent to your email:
+
+```bash
+curl -X POST "$PERXONA_API_BASE_URL/api/v1/connect/auth/reset-password" \
+  -H "Content-Type: application/json" \
+  -d '{ "token": "<token from email>", "new_password": "new-password", "confirm_password": "new-password" }'
+```
 
 ### Steps
 
@@ -119,7 +177,7 @@ Then open `.env` and fill in the values:
 
 | Variable                   | Required | Description                                                                                                                                       |
 | -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PERXONA_API_BASE_URL`     | ✅       | Region-specific Connect API base URL (e.g. `https://api.perxona.ai/eu`). From your Perxona contact.                                               |
+| `PERXONA_API_BASE_URL`     | ✅       | Region-specific Connect API base URL (e.g. `https://console.perxona.ai/asia`). From your Perxona contact.                                         |
 | `PERXONA_CONNECT_EMAIL`    | ✅       | Perxona service account email. The server signs in with this — no browser login.                                                                  |
 | `PERXONA_CONNECT_PASSWORD` | ✅       | Perxona service account password.                                                                                                                 |
 | `PORT`                     | —        | Port the app serves on (default `8083`).                                                                                                          |
@@ -182,6 +240,38 @@ the Connect API.
 | `POST /api/chat`                                                     | Opt-in LLM chat. Returns `501` until `LLM_API_KEY` is set.                                                         |
 | `POST /api/demo-script`                                              | Generate a structured script grounded in the selected avatar's motion catalog; validate Motion Markup server-side. |
 | `/api/chatbots*`                                                     | Chatbot CRUD, knowledge upload, and multi-turn chat.                                                               |
+
+### Direct Connect presentation API
+
+`POST /api/v1/connect/presentation` generates a one-shot presentation payload. It is a **direct Connect API** endpoint, not a
+route exposed by this Express sample. Send `avatar_id` and `message`; `voice_id`, `emotion`, and `intensity` are optional.
+
+Call it from your server with a Connect Bearer token. Do not expose a long-lived service token in browser code:
+
+```js
+const response = await fetch(
+  `${process.env.PERXONA_API_BASE_URL}/api/v1/connect/presentation`,
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${connectToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      avatar_id: avatarId,
+      voice_id: voiceId,
+      message: "Welcome to our hackathon demo!",
+      emotion: "excitement",
+      intensity: "high",
+    }),
+  },
+);
+```
+
+`emotion` sets the message tone and `intensity` sets its strength. Together, they guide facial-expression selection for
+suggested motions and soft-rank motion candidates. Both fields are optional; when both are omitted, no facial expression is
+attached. Use `intensity`, not `intens`. Valid `intensity` values are `low`, `neutral`, and `high`; consult
+`docs/openapi.yaml` for the valid `emotion` values and complete request/response schema.
 
 ### SDK: the `<sv-presenter>` Web Component
 
@@ -306,31 +396,33 @@ You've integrated the kit correctly when:
 
 ## 7. Troubleshooting (FAQ)
 
-**Server exits immediately with `PERXONA_API_BASE_URL is required` or
-`PERXONA_CONNECT_EMAIL and PERXONA_CONNECT_PASSWORD are required`.** You haven't created `.env` or left a required value blank.
-Run `cp .env.example .env` and fill in the API base URL and your Perxona service account credentials.
+**Why does `npm run dev`/`npm start` exit immediately with `.env not found`, or with
+`PERXONA_API_BASE_URL is required` or `PERXONA_CONNECT_EMAIL and PERXONA_CONNECT_PASSWORD are required`?** The first message
+means `.env` doesn't exist yet; the other two mean it exists but a required value is left blank. Either way, run
+`cp .env.example .env` and fill in the API base URL and your Perxona service account credentials.
 
-**Catalog fails to load with a `401`/`403` status message.** The server's `PERXONA_CONNECT_EMAIL`/`PERXONA_CONNECT_PASSWORD` are
-wrong, or `PERXONA_API_BASE_URL` points at the wrong region. Confirm both with your Perxona contact. Check `GET /api/health` —
-the `upstream` field shows whether the API is reachable.
+**Why does the catalog fail to load with a `401`/`403` status message?** The server's
+`PERXONA_CONNECT_EMAIL`/`PERXONA_CONNECT_PASSWORD` are wrong, or `PERXONA_API_BASE_URL` points at the wrong region.
+Double-check the credentials you set during sign-up and verify the API base URL. Check `GET /api/health` — the
+`upstream` field shows whether the API is reachable.
 
-**The avatar never appears, or there's no sound.** Audio playback must be unlocked by a real user gesture. Make sure you
-click **Enable Audio** (which calls `resumeAudioPlayback()`); audio won't start from page load alone. Watch for
-`PRESENTER_STATUS` to reach `Ready`, and check the browser console for SDK errors.
+**Why doesn't the avatar appear, or why is there no sound?** Audio playback must be unlocked by a real user gesture.
+Make sure you've clicked the demo's launch button (**Launch** in `basic`, **Launch Presenter** in `chatbot`,
+**Enable Audio** in `starter`/`external-llm`), which calls `resumeAudioPlayback()`; audio won't start from page load
+alone. Watch for `PRESENTER_STATUS` to reach `Ready`, and check the browser console for SDK errors.
 
-**Chat returns `501 LLM_API_KEY not configured`.** Chat is disabled by default. Set `LLM_API_KEY`, choose
+**Why does chat return `501 LLM_API_KEY not configured`?** Chat is disabled by default. Set `LLM_API_KEY`, choose
 `LLM_PROVIDER=openai` or `LLM_PROVIDER=anthropic`, and configure `LLM_MODEL` in `.env`, then restart.
 
-**The page won't load / port already in use.** Another process is using the port. Change `PORT` in `.env` (default `8083`) and
-restart.
+**Why won't the page load, or why does it say the port is already in use?** Another process is using the port.
+Change `PORT` in `.env` (default `8083`) and restart.
 
-**`npm install` or `npm run dev`/`npm start` fails with an "ERROR: Node ... is too old" message.** You're on an older Node. This
-kit requires **Node `>=22`** — run `nvm use` (reads `.nvmrc`) if you use nvm, or check `node --version` and upgrade at
-[nodejs.org](https://nodejs.org/).
+**Why does `npm install` or `npm run dev`/`npm start` fail with an "ERROR: Node ... is too old" message?** You're on
+an older Node. This kit requires **Node `>=22`** — run `nvm use` (reads `.nvmrc`) if you use nvm, or check
+`node --version` and upgrade at [nodejs.org](https://nodejs.org/).
 
-**The avatar initializes but won't speak.** `present()` resolves with a `PresentationResult` whose `success` is `false` —
-check the status message it surfaces (`code`/`message`) for why (e.g. no target resolved yet, or the Connect API rejected the
-presentation request). Also confirm the presenter reached `Ready` first.
+For Presenter SDK issues not specific to this sample, see [Presenter SDK Integration
+FAQs](../../README.md#presenter-sdk-integration-faqs) in the repo root README.
 
 ---
 
