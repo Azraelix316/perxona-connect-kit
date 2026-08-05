@@ -11,6 +11,8 @@ Web UI for previewing and controlling Perxona avatars via the Connect API and `<
 
 ## Getting Started
 
+Requires **Node `>=22`** — check with `node --version`.
+
 ```bash
 pnpm install
 cp .env.example .env
@@ -135,3 +137,8 @@ flowchart TD
 | `pnpm build`   | Type-check + production build |
 | `pnpm lint`    | Run ESLint                    |
 | `pnpm preview` | Preview production build      |
+
+## Troubleshooting
+
+For Presenter SDK issues not specific to this tool, see [Presenter SDK Integration
+FAQs](../../README.md#presenter-sdk-integration-faqs) in the repo root README.
