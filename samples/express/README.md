@@ -91,15 +91,16 @@ Postman to browse them).
 This sample uses **one set of server-side Connect credentials** (`PERXONA_CONNECT_EMAIL` / `PERXONA_CONNECT_PASSWORD` in `.env`)
 for every visitor — there is no per-user login. The server logs in lazily on the first protected request, caches the bearer
 token in memory, and reuses it for every subsequent call. `GET /api/connect-token` validates the cached bearer before handing
-it to the browser, which passes it straight into `presenter.initialize(connectToken, target)` — from that point on,
+it to the browser, which passes it straight into `presenter.initialize(connectToken, target)` (`target` is
+`{ avatarId, sceneId, voiceId }`) — from that point on,
 `<sv-presenter>` talks to the Connect API directly for avatar/scene resolution, speech synthesis, and token refresh.
 
 If the upstream API rejects the cached token (`401`/`403`) during a server-proxied call or connect-token validation — for
 example because it expired — the server transparently logs in again and retries once. This convenience model is meant for demos
 and hackathons: every browser hitting this server shares one upstream identity, which is not a multi-tenant, production-grade
 auth design. Note also that once a `connect_token` reaches the browser, it is a real bearer credential for the shared identity
-for its lifetime — wiring `refreshConnectToken`/`CONNECT_TOKEN_EXPIRED` for long sessions is a known gap (see
-[Known limitations](#6-known-limitations)).
+for its lifetime — every demo listens for the presenter's `CONNECT_TOKEN_EXPIRED` event and calls
+`presenter.refreshConnectToken()` with a freshly fetched token so a long-running session keeps working.
 
 ---
 
@@ -284,20 +285,22 @@ The presenter is loaded from Perxona's CDN. `app.js` fetches `GET /api/config` o
 
 `app.js` drives it through its JS API. The members used by this sample:
 
-| Member                                       | Role                                                                                           |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `presenter.initialize(connectToken, target)` | Boot the presenter: resolves `target` and mints its own speech token against the Connect API.  |
-| `presenter.resumeAudioPlayback()`            | Unlock browser autoplay. **Must run from a direct user gesture** (the Enable Audio click).     |
-| `presenter.present(content)`                 | Synthesize `content` into speech and play it back on the avatar.                               |
-| `presenter.presentWithAudio(audio, content)` | Play back a supplied speech audio buffer with `content` as the transcript for the performance. |
-| `presenter.playMotion(motionId)`             | Resolve, preload, and play one body motion independently from the speech queue.                |
-| `presenter.interruptPresentation()`          | Stop the current performance and clear the queue.                                              |
-| event `PRESENTER_STATUS`                     | `Uninitialized` → `Initializing` → `Ready`.                                                    |
+| Member                                        | Role                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `presenter.initialize(connectToken, target)`  | Boot the presenter: resolves `target` (`{ avatarId, sceneId, voiceId }`) and mints its own speech token against the Connect API. |
+| `presenter.resumeAudioPlayback()`             | Unlock browser autoplay. **Must run from a direct user gesture** (the demo's launch button).                                     |
+| `presenter.present(content)`                  | Synthesize `content` into speech and play it back on the avatar.                                                                 |
+| `presenter.presentWithAudio(audio, content)`  | Play back a supplied speech audio buffer with `content` as the transcript for the performance.                                   |
+| `presenter.playMotion(motionId)`              | Resolve, preload, and play one body motion independently from the speech queue.                                                  |
+| `presenter.interruptPresentation()`           | Stop the current performance and clear the queue.                                                                                |
+| event `PRESENTER_STATUS`                      | `Uninitialized` → `Initializing` → `Ready`.                                                                                      |
+| event `CONNECT_TOKEN_EXPIRED`                 | The Connect API rejected the token in use. Fetch a new one and call `refreshConnectToken()`.                                     |
+| `presenter.refreshConnectToken(connectToken)` | Swap in a fresh token for _subsequent_ calls — does not resend the call that just failed.                                        |
 
 ### Initialization (the basic flow)
 
 ```js
-// 1. Unlock audio from the user's Enable Audio click (autoplay policy).
+// 1. Unlock audio from the user's launch-button click (autoplay policy).
 await presenter.resumeAudioPlayback();
 
 // 2. Fetch the Connect bearer token this server minted.
@@ -322,7 +325,7 @@ const motionResult = await presenter.playMotion("known-motion-id");
 ```
 
 `present()` builds the speech + motion performance internally via the Connect API, using the avatar/voice resolved by
-`initialize()` — there is no client-built fallback anymore (see [Known limitations](#6-known-limitations)).
+`initialize()` — there is no client-built fallback anymore.
 
 ### Error handling
 
@@ -334,6 +337,12 @@ The sample handles the common failure paths so you can see the patterns:
   again with `PERXONA_CONNECT_EMAIL`/`PERXONA_CONNECT_PASSWORD`, and retries the request once. This is transparent to the
   browser; there's no re-login UI. If credentials are actually invalid, the browser sees a `401`/`403` and the status message
   tells you to check the server's `.env`.
+- **Expired Connect bearer token (browser-side, inside the presenter)** — once `connect_token` is handed to
+  `presenter.initialize()`, the presenter calls the Connect API directly; if it rejects that token, the presenter fires
+  `CONNECT_TOKEN_EXPIRED` _and_ still fails the call that triggered it. `app.js` listens for the event, fetches a fresh token
+  from `GET /api/connect-token`, and calls `presenter.refreshConnectToken()` so _subsequent_ Connect API calls use the new
+  token — the call that just failed is not automatically resent. If that call was `initialize()`, the click handler's catch
+  block shows the error and re-enables the launch button; clicking it again succeeds once the token has been refreshed.
 - **`initialize()`/`present()` failures** — `initialize()` rejects if the Connect API call to resolve the target fails (e.g.
   unknown avatar/scene id); the click handler catches it and shows a status message. `present()` never rejects — it resolves
   with a `PresentationResult` whose `success` is `false` and `code`/`message` explain why (e.g. no target resolved yet).
@@ -371,7 +380,8 @@ You've integrated the kit correctly when:
 1. `npm run dev` starts without errors and prints the local URL.
 2. `GET /api/health` returns `{ "status": "ok", ... }` — check it with `curl http://localhost:8083/api/health`.
 3. The avatar / scene / voice dropdowns populate from the catalog with no sign-in step.
-4. After **Enable Audio**, the status reaches `✓ Ready` and the avatar renders on the stage.
+4. After clicking the demo's launch button (**Launch** in `basic`, **Launch Presenter** in `chatbot`, **Enable Audio** in
+   `starter`/`external-llm`), the status reaches `✓ Ready` and the avatar renders on the stage.
 5. A preset button (or the text box) makes the avatar speak.
 
 ---
@@ -384,10 +394,6 @@ You've integrated the kit correctly when:
   there is no per-user login or per-user isolation. Fine for demos and hackathons; not a multi-tenant auth design.
 - **Mock mode is catalog-only.** It supplies fake catalog data but cannot emulate the presenter’s direct Connect API calls, so
   Launch and playback are disabled until live credentials are configured.
-- **`refreshConnectToken`/`CONNECT_TOKEN_EXPIRED` are not wired up.** The presenter dispatches `CONNECT_TOKEN_EXPIRED` when the
-  Connect API rejects the token it's using; this sample doesn't listen for it or call `presenter.refreshConnectToken()` in
-  response, so a long-running session can go stale once the shared `connect_token` expires — reload the page to mint a fresh
-  one via `GET /api/connect-token`.
 - **Chat is opt-in.** The chat panel stays disabled (and `POST /api/chat` returns `501`) until you set `LLM_API_KEY`. Use
   `LLM_PROVIDER=openai` for Chat Completions or `LLM_PROVIDER=anthropic` for Claude's Messages API.
 - **Minimal UI.** Plain vanilla JS with no framework or build step — intentionally, so the integration is easy to read.

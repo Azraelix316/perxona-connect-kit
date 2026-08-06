@@ -258,6 +258,28 @@ presenter.addEventListener("PRESENTER_STATUS", (e) => {
   }
 });
 
+// The presenter fires CONNECT_TOKEN_EXPIRED whenever a Connect API call inside
+// the SDK returns 401 — including during initialize() and during playback. The
+// call that triggered the event still fails; refreshConnectToken() only swaps
+// in a fresh token for *subsequent* calls, so a failed initialize()/present()
+// needs the user (or the calling code) to retry it.
+// isRefreshingToken guards against overlapping refreshes if the event fires
+// again (e.g. from a second in-flight call) before the first one settles.
+let isRefreshingToken = false;
+presenter.addEventListener("CONNECT_TOKEN_EXPIRED", async () => {
+  if (isRefreshingToken) return;
+  isRefreshingToken = true;
+  try {
+    const freshToken = await fetchConnectToken();
+    presenter.refreshConnectToken(freshToken);
+    setStatus("Connect token refreshed — try again.");
+  } catch (err) {
+    setStatus(`Token refresh failed: ${err.message}`);
+  } finally {
+    isRefreshingToken = false;
+  }
+});
+
 // ── Initialize presenter ───────────────────────────────────────────────────
 
 /**

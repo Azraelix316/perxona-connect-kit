@@ -10,7 +10,6 @@ paths:
     post:
       tags:
         - connect
-        - connect
       summary: Authenticate a Connect user and issue an access token
       description: >-
         Authenticate with email/password and receive a JWT access token signed with the dedicated Connect secret. Pass
@@ -43,7 +42,6 @@ paths:
   /api/v1/connect/auth/forgot-password:
     post:
       tags:
-        - connect
         - connect
       summary: Start a Connect forgot-password flow
       description: |-
@@ -83,7 +81,6 @@ paths:
     post:
       tags:
         - connect
-        - connect
       summary: Reset a Connect user's password from a forgot-password token
       description: |-
         Reset a password without issuing a Connect access token.
@@ -112,7 +109,6 @@ paths:
   /api/v1/connect/auth/signup:
     post:
       tags:
-        - connect
         - connect
       summary: Start a token-only Connect sign-up flow
       description: |-
@@ -163,7 +159,6 @@ paths:
   /api/v1/connect/auth/confirm-signup:
     post:
       tags:
-        - connect
         - connect
       summary: Complete a Connect sign-up and issue an access token
       description: |-
@@ -225,7 +220,6 @@ paths:
     post:
       tags:
         - connect
-        - connect
       summary: Revoke the Connect access token
       description: >-
         Adds the current Connect Bearer token to the revocation set. Subsequent requests using the same token will be
@@ -239,7 +233,6 @@ paths:
   /api/v1/connect/assets/avatars:
     get:
       tags:
-        - connect
         - connect
       summary: List avatars
       description: >-
@@ -295,7 +288,6 @@ paths:
     get:
       tags:
         - connect
-        - connect
       summary: Get avatar detail
       description: Return full detail for a single active avatar including LOD URLs and lipsync support.
       operationId: get_v1_connect_get_avatar
@@ -324,7 +316,6 @@ paths:
   /api/v1/connect/assets/avatars/{avatar_id}/motions:
     get:
       tags:
-        - connect
         - connect
       summary: List avatar motions
       description: >-
@@ -406,7 +397,6 @@ paths:
     get:
       tags:
         - connect
-        - connect
       summary: List scenes
       description: >-
         Return a paginated list of active scenes accessible to the authenticated user's organization or the default
@@ -461,7 +451,6 @@ paths:
     get:
       tags:
         - connect
-        - connect
       summary: Get scene detail
       description: Return full detail for a single active scene including LOD URLs.
       operationId: get_v1_connect_get_scene
@@ -490,7 +479,6 @@ paths:
   /api/v1/connect/assets/vrm/upload:
     post:
       tags:
-        - connect
         - connect
       summary: Upload a VRM file and register it as an avatar
       description: >-
@@ -527,7 +515,6 @@ paths:
   /api/v1/connect/voices:
     get:
       tags:
-        - connect
         - connect
       summary: List available custom voice models
       description: >-
@@ -624,7 +611,6 @@ paths:
     get:
       tags:
         - connect
-        - connect
       summary: Get Connect voice synthesis details
       description: >-
         Return the public provider-specific synthesis configuration for a custom voice visible to the current
@@ -669,7 +655,6 @@ paths:
     post:
       tags:
         - connect
-        - connect
       summary: Generate a text-to-speech token
       description: |-
         Issue a TTS token for the given custom voice ID.
@@ -701,7 +686,6 @@ paths:
   /api/v1/connect/presentation:
     post:
       tags:
-        - connect
         - connect
       summary: Generate presentation payload
       description: >-
@@ -739,7 +723,6 @@ paths:
     post:
       tags:
         - connect
-        - connect
       summary: Create a chat bot
       description: >-
         Create a new Connect chat bot, optionally seeding its knowledge file and tools. Knowledge file upload and tool
@@ -773,7 +756,6 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
     get:
       tags:
-        - connect
         - connect
       summary: List chat bots
       description: >-
@@ -817,7 +799,6 @@ paths:
     get:
       tags:
         - connect
-        - connect
       summary: Get chat bot detail
       description: Get full detail for a single chat bot, including its knowledge status and tools.
       operationId: get_v1_connect_get_chat_bot
@@ -845,7 +826,6 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
     patch:
       tags:
-        - connect
         - connect
       summary: Update a chat bot
       description: >-
@@ -889,7 +869,6 @@ paths:
     delete:
       tags:
         - connect
-        - connect
       summary: Delete a chat bot
       description: Soft-delete a chat bot and clean up its knowledge/tool bindings.
       operationId: delete_v1_connect_delete_chat_bot
@@ -914,7 +893,6 @@ paths:
   /api/v1/connect/chatbots/{chat_bot_id}/chat:
     post:
       tags:
-        - connect
         - connect
       summary: Send a message to a chat bot
       operationId: post_v1_connect_chat_with_chat_bot
