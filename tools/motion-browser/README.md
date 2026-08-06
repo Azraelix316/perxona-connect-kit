@@ -11,7 +11,9 @@ Web UI for previewing and controlling Perxona avatars via the Connect API and `<
 
 ## Getting Started
 
-Requires **Node `>=22`** — check with `node --version`.
+Requires **Node `>=22`** — check with `node --version`. You'll also need a Perxona Connect account to sign in; if you
+don't have one yet, see [Getting a Connect account](../../samples/express/README.md#getting-a-connect-account) for
+the sign-up steps.
 
 ```bash
 pnpm install
