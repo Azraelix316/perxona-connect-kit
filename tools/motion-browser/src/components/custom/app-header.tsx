@@ -32,7 +32,7 @@ export function AppHeader({
   return (
     <header
       className={cn(
-        "flex h-[90px] items-center gap-4 border-b border-[rgba(145,158,171,0.2)] bg-transparent px-10",
+        "flex h-[90px] items-center gap-4 bg-transparent px-10",
         "bg-[linear-gradient(0deg,_rgba(0,0,0,0)_0%,_#5C5C5C_155%)]",
         className,
       )}

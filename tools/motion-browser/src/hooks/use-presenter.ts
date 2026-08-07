@@ -78,6 +78,19 @@ export function usePresenter(options: UsePresenterOptions): UsePresenter {
               vertical: 0,
               horizontal: 4.5,
             });
+
+            // On first mount, the element goes from hidden (0x0) to visible, which is
+            // itself a real resize that the presenter's internal ResizeObserver-driven
+            // canvas scaling picks up. On a re-initialization (e.g. switching avatars)
+            // the element is already visible and stays the same size, so that internal
+            // resize logic never re-fires and the canvas keeps a stale scale. Nudge the
+            // element's width by a pixel and back on the next frame to force a genuine,
+            // ResizeObserver-detectable size change and trigger it again.
+            const width = el.style.width;
+            el.style.width = "calc(100% - 1px)";
+            requestAnimationFrame(() => {
+              el.style.width = width;
+            });
           } else {
             // A re-initialization (e.g. avatar/scene/voice switch) has started;
             // the previous presenter state is no longer valid until Ready fires again.
