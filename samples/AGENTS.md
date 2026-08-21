@@ -6,7 +6,8 @@ dependencies, its own docs, no shared build step or code between samples.
 
 ## Available Samples
 
-- [`express/`](express/) — an Express-based sample with Chatbot and External LLM demos. See
+- [`express/`](express/) — an Express-based sample with Studio and Embed demos, in that order: Studio creates the chatbot
+  Embed answers through. See
   [`express/README.md`](express/README.md) for setup and usage, and
   [`express/AGENTS.md`](express/AGENTS.md) for its architecture and conventions.
 
