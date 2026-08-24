@@ -2,9 +2,8 @@
 
 Minimal sample apps for building with Perxona Connect.
 
-> All samples and tools in this repository use a Perxona Connect account. Create one through the Connect Sign Up API:
-> `POST /api/v1/connect/auth/signup` followed by `POST /api/v1/connect/auth/confirm-signup`. See
-> [`samples/express/README.md`](samples/express/README.md) for the full steps.
+> All samples and tools in this repository use a Perxona Connect account. Sign up on the Perxona console — there is no
+> sign-up API. See [`samples/express/README.md`](samples/express/README.md) for the full steps.
 
 ## Samples
 
