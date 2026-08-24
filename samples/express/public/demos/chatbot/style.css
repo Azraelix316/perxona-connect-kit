@@ -1,4 +1,4 @@
-/* Perxona Connect Kit — Studio Demo styles */
+/* Perxona Connect Kit — Chatbot Demo styles */
 
 /* ── Reset + base ──────────────────────────────────────────────────────── */
 
@@ -64,11 +64,7 @@ body {
   color: var(--danger);
 }
 
-/* Text-entry controls only. A bare `input` selector also matches
-   [type=radio]/[type=checkbox], which have no useful width of their own — the
-   width:100% below stretched the Model source radios into full-width boxes and
-   pushed their labels outside the border. */
-input:not([type="radio"]):not([type="checkbox"]),
+input,
 select,
 textarea {
   padding: 0.6rem 0.85rem;
@@ -87,7 +83,7 @@ textarea {
   line-height: 1.5;
 }
 
-input:not([type="radio"]):not([type="checkbox"]):focus,
+input:focus,
 select:focus,
 textarea:focus {
   outline: none;
@@ -240,13 +236,6 @@ button:disabled {
 .sidebar-section:first-of-type {
   border-top: none;
   padding-top: 0;
-}
-
-.section-note {
-  font-size: 0.72rem;
-  line-height: 1.5;
-  color: var(--text-muted);
-  margin: 0.15rem 0 0.55rem;
 }
 
 .section-label {
@@ -503,75 +492,6 @@ details[open] summary::before {
   line-height: 1.5;
 }
 
-/* ── Model source switch ───────────────────────────────────────────────── */
-
-.source-option {
-  display: flex;
-  gap: 0.55rem;
-  align-items: start;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 0.4rem;
-  cursor: pointer;
-}
-
-.source-option:has(input:checked) {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.source-option:has(input:disabled) {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.source-option input {
-  /* Explicit, so this does not depend on the exclusion above staying correct. */
-  width: auto;
-  margin-top: 0.15rem;
-  flex-shrink: 0;
-  accent-color: var(--accent);
-}
-.source-option > span {
-  /* min-width:0 lets the text wrap instead of forcing the label wider than the
-     sidebar: a flex item defaults to min-width:auto, which refuses to shrink
-     below its longest unbreakable word — `LLM_API_KEY` here. */
-  min-width: 0;
-  flex: 1;
-}
-
-.source-option strong {
-  display: block;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.source-option small {
-  display: block;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  line-height: 1.45;
-  margin-top: 0.1rem;
-}
-
-.source-option code {
-  font-size: 0.68rem;
-}
-
-/* Reads the source back inside the chat panel, where the sidebar may be
-   scrolled away — see index.html. */
-.active-source {
-  font-size: 0.74rem;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.active-source strong {
-  color: var(--accent);
-  font-weight: 600;
-}
-
 .field-hint code {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -824,6 +744,21 @@ details[open] summary::before {
 }
 
 /* Per-type accent colours */
+.debug-entry--user::before,
+.debug-entry--user .debug-msg {
+  color: #a78bfa;
+} /* purple — user       */
+
+.debug-entry--api::before,
+.debug-entry--api .debug-msg {
+  color: #fbbf24;
+} /* amber  — API call   */
+
+.debug-entry--bot::before,
+.debug-entry--bot .debug-msg {
+  color: #34d399;
+} /* green  — bot reply  */
+
 .debug-entry--cmd::before,
 .debug-entry--cmd .debug-msg {
   color: #38bdf8;
@@ -944,49 +879,4 @@ details[open] summary::before {
   width: auto;
   flex-shrink: 0;
   padding: 0.6rem 1.1rem;
-}
-
-/* ── Narrow viewports ─────────────────────────────────────────────────────
-   Studio is a console and assumes a desktop, but "assumes a desktop" is not
-   the same as "breaks below one" — at 300px + 1fr the sidebar squeezes the
-   stage to nothing on a laptop with a half-width window, a tablet, or a
-   projector. Below 900px it stacks instead, and the page scrolls rather than
-   the three panes fighting over a fixed height. */
-@media (max-width: 900px) {
-  html,
-  body {
-    height: auto;
-  }
-  #app {
-    grid-template-columns: 1fr;
-    height: auto;
-    min-height: 100%;
-  }
-  .sidebar {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    overflow-y: visible;
-  }
-  .main {
-    grid-template-rows: auto auto;
-    overflow: visible;
-  }
-  .stage {
-    /* The avatar still needs room to be worth looking at. */
-    min-height: min(60vh, 420px);
-  }
-  .chat-area {
-    min-height: 260px;
-  }
-}
-
-/* The controls must stay reachable when the send/stop pair no longer fits
-   beside the input. */
-@media (max-width: 420px) {
-  .chat-input-row {
-    flex-wrap: wrap;
-  }
-  .chat-input-row input {
-    flex: 1 1 100%;
-  }
 }

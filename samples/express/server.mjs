@@ -8,6 +8,12 @@ const USE_MOCK = process.env.USE_MOCK === "true";
 const PRESENTER_URL =
   process.env.PRESENTER_URL ||
   "https://cdn.perxona.ai/prod/latest/widget/entry/presenter.js";
+const DEMO_DEFAULTS = {
+  avatarId: process.env.DEMO_DEFAULT_AVATAR_ID || "avatar-1",
+  sceneId: process.env.DEMO_DEFAULT_SCENE_ID || "scene-1",
+  voiceId: process.env.DEMO_DEFAULT_VOICE_ID || "voice-1",
+  motionId: process.env.DEMO_DEFAULT_MOTION_ID || "motion-talking-1",
+};
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
 const LLM_API_KEY = process.env.LLM_API_KEY;
 const PRESENTER_TARGET = {
@@ -15,7 +21,6 @@ const PRESENTER_TARGET = {
   sceneId: process.env.DEMO_FIXED_SCENE_ID,
   voiceId: process.env.DEMO_FIXED_VOICE_ID,
 };
-const FIXED_CHATBOT_ID = process.env.DEMO_FIXED_CHATBOT_ID;
 const hasConfiguredPresenterTarget = Boolean(
   PRESENTER_TARGET.avatarId ||
     PRESENTER_TARGET.sceneId ||
@@ -36,22 +41,14 @@ const fixedPresenterTarget = hasCompletePresenterTarget
 // Server-side credentials for the one shared Connect API identity this sample
 // uses — see README "Auth model". Every browser hitting this server acts
 // through the same upstream account; there is no per-user login.
-//
-// Two keys, on opposite sides of the trust boundary: the secret one never
-// leaves this process, the publishable one is what the browser is given.
-const CONNECT_SECRET_KEY = process.env.PERXONA_CONNECT_SECRET_KEY;
-const CONNECT_PUBLISHABLE_KEY = process.env.PERXONA_CONNECT_PUBLISHABLE_KEY;
+const CONNECT_EMAIL = process.env.PERXONA_CONNECT_EMAIL;
+const CONNECT_PASSWORD = process.env.PERXONA_CONNECT_PASSWORD;
 
-// All blank is fine — resolveEmbedConfig() picks from the catalog. Half-filled
-// is not: it does nothing silently, so name what is missing.
 if (hasConfiguredPresenterTarget && !hasCompletePresenterTarget) {
-  const missing = ["DEMO_FIXED_AVATAR_ID", "DEMO_FIXED_SCENE_ID"].filter(
-    (name) => !process.env[name],
+  console.error(
+    "ERROR: DEMO_FIXED_AVATAR_ID and DEMO_FIXED_SCENE_ID must be configured together. DEMO_FIXED_VOICE_ID is optional for BYO-TTS.",
   );
-  console.warn(
-    `WARNING: ${missing.join(" and ")} not set, so the DEMO_FIXED_* values are ignored.\n` +
-      "Set DEMO_FIXED_AVATAR_ID and DEMO_FIXED_SCENE_ID together to pin a target, or clear every DEMO_FIXED_* value to let the server pick the first avatar and scene in your catalog. DEMO_FIXED_VOICE_ID is optional — blank selects BYO-TTS.",
-  );
+  process.exit(1);
 }
 
 // Real credentials are only needed when actually calling the upstream API.
@@ -65,32 +62,10 @@ if (!USE_MOCK) {
     process.exit(1);
   }
 
-  if (!CONNECT_SECRET_KEY || !CONNECT_PUBLISHABLE_KEY) {
-    // Which side each key belongs on. Swapping them is not reported anywhere:
-    // the upstream accepts either, so a secret key would simply be served to
-    // the browser.
-    const sides =
-      "PERXONA_CONNECT_SECRET_KEY authenticates this server and must never reach a browser.\n" +
-      "PERXONA_CONNECT_PUBLISHABLE_KEY is the one handed to the presenter.\n";
-    const onlyOneKey =
-      Boolean(CONNECT_SECRET_KEY) !== Boolean(CONNECT_PUBLISHABLE_KEY);
-    const missing = CONNECT_SECRET_KEY
-      ? "PERXONA_CONNECT_PUBLISHABLE_KEY"
-      : "PERXONA_CONNECT_SECRET_KEY";
-    // Reached only by a .env written for the login mode this sample used to
-    // have. Without it that .env looks like a typo rather than a removal.
-    const removedLogin =
-      process.env.PERXONA_CONNECT_EMAIL || process.env.PERXONA_CONNECT_PASSWORD
-        ? "PERXONA_CONNECT_EMAIL and PERXONA_CONNECT_PASSWORD are no longer read — this sample authenticates with a Connect API key instead.\n"
-        : "";
-
+  if (!CONNECT_EMAIL || !CONNECT_PASSWORD) {
     console.error(
-      (onlyOneKey
-        ? `ERROR: ${missing} is not set. Both Connect API keys are required — one is not enough.\n`
-        : "ERROR: PERXONA_CONNECT_SECRET_KEY and PERXONA_CONNECT_PUBLISHABLE_KEY are required.\n") +
-        removedLogin +
-        sides +
-        "Create both at https://console.perxona.ai, then copy .env.example to .env and fill them in.",
+      "ERROR: PERXONA_CONNECT_EMAIL and PERXONA_CONNECT_PASSWORD are required.\n" +
+        "Copy .env.example to .env and fill them in with your Perxona service credentials.",
     );
     process.exit(1);
   }
@@ -100,17 +75,13 @@ if (!USE_MOCK) {
 
 /**
  * Send an authenticated request to the Perxona upstream API.
- *
- * X-Connect-Key is the only credential header this server sends. A request
- * carrying an Authorization as well is rejected upstream with 400, so the two
- * are never combined — here or anywhere else.
  * @param {string} path  - Upstream path, e.g. '/api/v1/connect/voices'
  * @param {object} opts  - fetch options (method, body, headers…)
- * @param {string} [credential] - Connect API key; omit for unauthenticated calls
+ * @param {string} [token] - JWT access token; omit for unauthenticated calls
  */
-async function callUpstream(path, opts, credential) {
+async function callUpstream(path, opts, token) {
   const headers = { "Content-Type": "application/json", ...opts.headers };
-  if (credential) headers["X-Connect-Key"] = credential;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   return fetch(`${PERXONA_API_BASE_URL}${path}`, { ...opts, headers });
 }
 
@@ -118,8 +89,8 @@ async function callUpstream(path, opts, credential) {
  * Parse a callUpstream() Response as JSON, throwing a structured error
  * ({ status, payload }) on any non-2xx status. Centralising this means every
  * connectApi method — not just the ones that used to check r.ok by hand —
- * surfaces the upstream status the same way, which is what lets route() map it
- * onto the response instead of collapsing it to a 502.
+ * surfaces 401/403 the same way, which is what lets authedCall() (see below)
+ * detect an expired bearer token and transparently re-login and retry.
  * @param {Response} r
  * @param {string} label  Used in the thrown error message, e.g. "voices".
  */
@@ -141,10 +112,11 @@ async function upstreamJson(r, label) {
  * @param {string} path  - Upstream path, e.g. '/api/v1/connect/chatbots'
  * @param {"POST"|"PATCH"} method
  * @param {FormData} form
- * @param {string} [credential] - Connect API key
+ * @param {string} [token] - JWT access token
  */
-async function callUpstreamFormData(path, method, form, credential) {
-  const headers = credential ? { "X-Connect-Key": credential } : {};
+async function callUpstreamFormData(path, method, form, token) {
+  const headers = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   return fetch(`${PERXONA_API_BASE_URL}${path}`, {
     method,
     headers,
@@ -183,18 +155,22 @@ const connectApi = {
     }
   },
 
-  async voices(credential) {
-    const r = await callUpstream("/api/v1/connect/voices", {}, credential);
+  async login(body) {
+    const r = await callUpstream("/api/v1/connect/auth/login", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return upstreamJson(r, "login");
+  },
+
+  async voices(token) {
+    const r = await callUpstream("/api/v1/connect/voices", {}, token);
     return upstreamJson(r, "voices"); // Page[ConnectVoiceResponse] — items already have { id, name, … }
   },
 
   // Normalize avatar list: backend uses avatar_id; frontend dropdowns expect id.
-  async avatars(credential) {
-    const r = await callUpstream(
-      "/api/v1/connect/assets/avatars",
-      {},
-      credential,
-    );
+  async avatars(token) {
+    const r = await callUpstream("/api/v1/connect/assets/avatars", {}, token);
     const page = await upstreamJson(r, "avatars");
     return {
       ...page,
@@ -207,32 +183,28 @@ const connectApi = {
 
   // Raw avatar detail — the frontend never calls this directly; it's exposed as a
   // standalone REST resource for reference (see docs/openapi.yaml).
-  async avatar(id, credential) {
+  async avatar(id, token) {
     const r = await callUpstream(
       `/api/v1/connect/assets/avatars/${id}`,
       {},
-      credential,
+      token,
     );
     return upstreamJson(r, "avatar detail");
   },
 
   // Motions are a sub-resource of an avatar, not a top-level collection.
-  async avatarMotions(avatarId, credential) {
+  async avatarMotions(avatarId, token) {
     const r = await callUpstream(
       `/api/v1/connect/assets/avatars/${encodeURIComponent(avatarId)}/motions`,
       {},
-      credential,
+      token,
     );
     return upstreamJson(r, "avatar motions"); // Page[ConnectMotionAssetResponse]
   },
 
   // Normalize scene list: backend uses scene_id; frontend dropdowns expect id.
-  async scenes(credential) {
-    const r = await callUpstream(
-      "/api/v1/connect/assets/scenes",
-      {},
-      credential,
-    );
+  async scenes(token) {
+    const r = await callUpstream("/api/v1/connect/assets/scenes", {}, token);
     const page = await upstreamJson(r, "scenes");
     return {
       ...page,
@@ -245,11 +217,11 @@ const connectApi = {
 
   // Raw scene detail — the frontend never calls this directly; it's exposed as a
   // standalone REST resource for reference (see docs/openapi.yaml).
-  async scene(id, credential) {
+  async scene(id, token) {
     const r = await callUpstream(
       `/api/v1/connect/assets/scenes/${id}`,
       {},
-      credential,
+      token,
     );
     return upstreamJson(r, "scene detail");
   },
@@ -261,25 +233,21 @@ const connectApi = {
   // the browser and re-encodes it as FormData before forwarding. This keeps
   // the browser-facing API simple (JSON), while matching what the upstream expects.
 
-  async listChatbots(credential) {
-    const r = await callUpstream(
-      "/api/v1/connect/chatbots?size=50",
-      {},
-      credential,
-    );
+  async listChatbots(token) {
+    const r = await callUpstream("/api/v1/connect/chatbots?size=50", {}, token);
     return upstreamJson(r, "chatbots");
   },
 
-  async getChatbot(id, credential) {
+  async getChatbot(id, token) {
     const r = await callUpstream(
       `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
       {},
-      credential,
+      token,
     );
     return upstreamJson(r, "chatbot detail");
   },
 
-  async createChatbot({ name, custom_instructions, tools }, credential) {
+  async createChatbot({ name, custom_instructions, tools }, token) {
     const form = new FormData();
     form.append("name", name);
     if (custom_instructions != null)
@@ -289,7 +257,7 @@ const connectApi = {
       "/api/v1/connect/chatbots",
       "POST",
       form,
-      credential,
+      token,
     );
     return upstreamJson(r, "create chatbot");
   },
@@ -297,7 +265,7 @@ const connectApi = {
   async updateChatbot(
     id,
     { name, custom_instructions, tools, remove_knowledge },
-    credential,
+    token,
   ) {
     const form = new FormData();
     if (name != null) form.append("name", name);
@@ -309,14 +277,14 @@ const connectApi = {
       `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
       "PATCH",
       form,
-      credential,
+      token,
     );
     return upstreamJson(r, "update chatbot");
   },
 
   // Upload a knowledge file for a chatbot by PATCHing with knowledge_file.
   // The caller supplies a Buffer so this method stays independent of Express.
-  async uploadChatbotKnowledge(id, fileBuffer, filename, mimeType, credential) {
+  async uploadChatbotKnowledge(id, fileBuffer, filename, mimeType, token) {
     const form = new FormData();
     form.append(
       "knowledge_file",
@@ -327,16 +295,16 @@ const connectApi = {
       `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
       "PATCH",
       form,
-      credential,
+      token,
     );
     return upstreamJson(r, "upload chatbot knowledge");
   },
 
-  async deleteChatbot(id, credential) {
+  async deleteChatbot(id, token) {
     const r = await callUpstream(
       `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
       { method: "DELETE" },
-      credential,
+      token,
     );
     if (!r.ok) {
       const payload = await r.json().catch(() => ({}));
@@ -348,11 +316,11 @@ const connectApi = {
     // 204 No Content — intentionally returns nothing
   },
 
-  async chatWithChatbot(id, messages, credential) {
+  async chatWithChatbot(id, messages, token) {
     const r = await callUpstream(
       `/api/v1/connect/chatbots/${encodeURIComponent(id)}/chat`,
       { method: "POST", body: JSON.stringify({ messages }) },
-      credential,
+      token,
     );
     return upstreamJson(r, "chat with chatbot");
   },
@@ -368,7 +336,7 @@ if (USE_MOCK) {
       "ERROR: USE_MOCK=true but mocks/upstream.mjs is not present.\n" +
         "The mock implementation is internal-only and is not included in this " +
         "public sample — set USE_MOCK=false (or remove it) and fill in real " +
-        "PERXONA_API_BASE_URL / PERXONA_CONNECT_SECRET_KEY / PERXONA_CONNECT_PUBLISHABLE_KEY instead.",
+        "PERXONA_API_BASE_URL / PERXONA_CONNECT_EMAIL / PERXONA_CONNECT_PASSWORD instead.",
     );
     process.exit(1);
   }
@@ -376,103 +344,59 @@ if (USE_MOCK) {
   api = connectApi;
 }
 
-// ── Upstream identity ───────────────────────────────────────────────────────
+// ── Global upstream auth (token manager) ────────────────────────────────────
 //
-// Every upstream call carries CONNECT_SECRET_KEY, shared by every browser that
-// hits this server — see README "Auth model". Nothing is retried on a 401/403:
-// a key is refused only when it is revoked, expired, or missing a scope, so the
-// same key fails the same way and the upstream status reaches the browser
-// unchanged.
+// This sample exchanges ONE set of server-side credentials (PERXONA_CONNECT_EMAIL /
+// PERXONA_CONNECT_PASSWORD) for ONE Connect API bearer token, shared by every
+// browser that hits this server. There is no per-user login — see README "Auth
+// model" for the rationale and its tradeoffs.
+
+/** The current shared bearer token, or null before the first login. */
+let cachedToken = null;
+/** In-flight login request — de-dupes concurrent callers into one upstream login call. */
+let loginPromise = null;
 
 /**
- * The target and chatbot the Embed demo runs on, reported on GET /api/config.
- * Pinned by DEMO_FIXED_*, otherwise the first of each in the account. Which of
- * the two happened goes to the startup log, never to the page.
- * @returns {Promise<{target: object|null, chatbotId: string|null}>}
+ * Return the current bearer token, logging in with the configured Connect
+ * credentials on first use (lazy — no login happens until the first protected
+ * route is hit) or when forceRefresh is set (after upstream rejects the
+ * cached token with 401/403). Concurrent callers share the same in-flight
+ * login request instead of each triggering their own.
+ * @param {{ forceRefresh?: boolean }} [opts]
+ * @returns {Promise<string>}
  */
-let embedConfigPromise = null;
-async function resolveEmbedConfig() {
-  // Mock mode's catalog cannot drive the presenter and its chatbot routes 501,
-  // so auto-picking would return ids that resolve to nothing. Pinned values
-  // cost no upstream call and still stand.
-  if (USE_MOCK)
-    return {
-      target: fixedPresenterTarget,
-      chatbotId: FIXED_CHATBOT_ID ?? null,
-    };
-
-  embedConfigPromise ??= (async () => {
-    const [target, chatbotId] = await Promise.all([
-      resolveTarget(),
-      resolveChatbotId(),
-    ]);
-    // Cache only a complete success: the resolvers cannot tell a missing
-    // credential from a one-off upstream failure, and a chatbot created later
-    // must be picked up without a restart.
-    if (!target || !chatbotId) embedConfigPromise = null;
-    return { target, chatbotId };
-  })();
-  return embedConfigPromise;
-}
-
-/** Avatar + scene + voice: pinned via DEMO_FIXED_*, else first in the catalog. */
-async function resolveTarget() {
-  if (fixedPresenterTarget) return fixedPresenterTarget;
-  try {
-    const [avatars, scenes, voices] = await Promise.all([
-      api.avatars(CONNECT_SECRET_KEY),
-      api.scenes(CONNECT_SECRET_KEY),
-      api.voices(CONNECT_SECRET_KEY),
-    ]);
-    const avatarId = avatars?.items?.[0]?.id;
-    const sceneId = scenes?.items?.[0]?.id;
-    // Auto-pick includes a voice; a pinned target does not. present() fails
-    // without one, but a blank DEMO_FIXED_VOICE_ID means BYO-TTS on purpose.
-    const voiceId = voices?.items?.[0]?.id;
-    if (!avatarId || !sceneId) return null;
-    if (!voiceId) {
-      console.warn(
-        "WARNING: no voices in this account's catalog, so the auto-selected target has none.\n" +
-          "present() will fail — use presentWithAudio(), or set DEMO_FIXED_VOICE_ID.",
-      );
-    }
-    console.log(
-      `Auto-selected presenter target: avatar ${avatarId}, scene ${sceneId}` +
-        `${voiceId ? `, voice ${voiceId}` : ""}. ` +
-        "Set DEMO_FIXED_AVATAR_ID / DEMO_FIXED_SCENE_ID in .env to pin your own.",
-    );
-    return { avatarId, sceneId, ...(voiceId ? { voiceId } : {}) };
-  } catch (err) {
-    console.warn(
-      `WARNING: could not auto-select a presenter target: ${err.message}`,
-    );
-    return null;
+async function getToken({ forceRefresh = false } = {}) {
+  if (cachedToken && !forceRefresh) return cachedToken;
+  if (forceRefresh) cachedToken = null;
+  if (!loginPromise) {
+    loginPromise = api
+      .login({ email: CONNECT_EMAIL, password: CONNECT_PASSWORD })
+      .then(({ access_token }) => {
+        cachedToken = access_token;
+        return cachedToken;
+      })
+      .finally(() => {
+        loginPromise = null;
+      });
   }
+  return loginPromise;
 }
 
-/** The chatbot Embed converses against: DEMO_FIXED_CHATBOT_ID, else the first. */
-async function resolveChatbotId() {
-  if (FIXED_CHATBOT_ID) return FIXED_CHATBOT_ID;
+/**
+ * Run an upstream call with the shared token, transparently re-logging in and
+ * retrying once if the token was rejected (401/403). This is what makes token
+ * expiry invisible to the browser — no re-login UI or refresh token needed.
+ * Any other error (network failure, 5xx, etc.) is rethrown as-is.
+ * @param {(token: string) => Promise<any>} fn
+ */
+async function authedCall(fn) {
+  const token = await getToken();
   try {
-    const { items } = await api.listChatbots(CONNECT_SECRET_KEY);
-    // Disabled chatbots stay in the list but reject every message.
-    const chatbotId =
-      items?.find(({ status }) => status !== "disabled")?.id ?? null;
-    if (!chatbotId) {
-      console.warn(
-        "No chatbots in this account yet, so the Embed demo has nothing to talk to.\n" +
-          "Create one in the Studio demo (/demos/studio/) — it is picked up on the next page load,\n" +
-          "no restart needed — or set DEMO_FIXED_CHATBOT_ID in .env.",
-      );
-      return null;
-    }
-    console.log(
-      `Auto-selected chatbot ${chatbotId}. Set DEMO_FIXED_CHATBOT_ID in .env to pin your own.`,
-    );
-    return chatbotId;
+    return await fn(token);
   } catch (err) {
-    console.warn(`WARNING: could not auto-select a chatbot: ${err.message}`);
-    return null;
+    if (err.status !== 401 && err.status !== 403) throw err;
+    const freshToken = await getToken({ forceRefresh: true });
+    return fn(freshToken);
   }
 }
 
@@ -494,8 +418,8 @@ app.use(express.static("public", { etag: !IS_DEV }));
 app.use(express.json());
 
 /**
- * Wrap a route handler so any thrown error (an upstream failure surfaced by
- * upstreamJson) becomes a JSON error response instead of an
+ * Wrap a route handler so any thrown error (upstream failure, or auth retry
+ * exhaustion from authedCall) becomes a JSON error response instead of an
  * unhandled rejection — Express 4 does not catch async handler rejections on
  * its own.
  * @param {(req: express.Request, res: express.Response) => Promise<void>} handler
@@ -524,44 +448,40 @@ app.get("/api/health", async (_req, res) => {
   });
 });
 
-// GET /api/config → { mock, chat, presenterUrl, fixedTarget, chatbotId }.
-// Cheap to poll: `chat` reports the presence of LLM_API_KEY, never the key, and
-// resolveEmbedConfig()'s catalog lookup is memoized. No field says whether a
-// value was pinned or auto-picked — nothing may render that.
-app.get(
-  "/api/config",
-  route(async (_req, res) => {
-    const { target, chatbotId } = await resolveEmbedConfig();
-    res.json({
-      mock: USE_MOCK,
-      chat: Boolean(process.env.LLM_API_KEY),
-      presenterUrl: PRESENTER_URL,
-      fixedTarget: target,
-      chatbotId,
-    });
-  }),
-);
+// GET /api/config → { mock, chat, presenterUrl, fixedTarget }. Static per-process flags fixed
+// at startup; no upstream probe, so the frontend can read them cheaply without
+// triggering a backend round-trip on every poll. `chat` reflects the presence of
+// LLM_API_KEY only — never the key itself. `presenterUrl` lets demo frontends
+// inject the presenter engine <script> dynamically instead of server-side HTML
+// templating.
+app.get("/api/config", (_req, res) => {
+  res.json({
+    mock: USE_MOCK,
+    chat: Boolean(process.env.LLM_API_KEY),
+    presenterUrl: PRESENTER_URL,
+    defaults: DEMO_DEFAULTS,
+    fixedTarget: fixedPresenterTarget,
+  });
+});
 
-// GET /api/connect-key
-// Returns: { connect_key } — the PUBLISHABLE key the browser passes into
-//          presenter.initializeWithConnectKey(connectKey, target). From there,
-//          <sv-presenter> talks to the Connect API directly to resolve the
-//          target and mint its own speech token.
-//          This is never PERXONA_CONNECT_SECRET_KEY. That keeps the secret key
-//          out of the browser — it does not put the chatbot routes out of
-//          reach, since the /api/* routes below have no request-layer
-//          authorization of their own. See README "Auth model".
+// GET /api/connect-token
+// Returns: { connect_token } — the Connect Kit Bearer JWT the browser passes into
+//          presenter.initialize(connectToken, target). From there, <sv-presenter>
+//          talks to the Connect API directly to resolve the target, mint its own
+//          speech token, and refresh it — this server's only job is minting the
+//          token via its one shared login (see "Auth model" in README).
+//          The token is validated against the catalog first, so a cached token
+//          rejected with 401/403 is refreshed before it reaches the browser.
+// Errors:  502 upstream login failure.
 app.get(
-  "/api/connect-key",
+  "/api/connect-token",
   route(async (_req, res) => {
     res.set({ "Cache-Control": "no-store", Pragma: "no-cache" });
-    // Mock mode has no keys to serve. Saying so beats 200 with an empty body,
-    // which is the one shape that reads as success.
-    if (USE_MOCK) {
-      res.status(501).json({ error: "No Connect key to serve in mock mode." });
-      return;
-    }
-    res.json({ connect_key: CONNECT_PUBLISHABLE_KEY });
+    const connectToken = await authedCall(async (token) => {
+      await api.voices(token);
+      return token;
+    });
+    res.json({ connect_token: connectToken });
   }),
 );
 
@@ -571,8 +491,8 @@ app.get(
 // GET  /api/scenes           GET  /api/scenes/:id
 // POST /api/chat             (disabled when LLM_API_KEY is unset → 501)
 //
-// All routes below send CONNECT_SECRET_KEY upstream. There is no per-request
-// auth check on this server either — see README "Auth model".
+// All routes below share the one server-side Connect identity via authedCall();
+// there is no per-request auth check — see the token manager above.
 
 // Catalog — read-only lists + single items used to populate UI dropdowns.
 //   GET /api/voices              → Page { items: [{ id, name, … }] }
@@ -584,14 +504,14 @@ app.get(
 app.get(
   "/api/voices",
   route(async (_req, res) => {
-    res.json(await api.voices(CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.voices(token)));
   }),
 );
 
 app.get(
   "/api/avatars",
   route(async (_req, res) => {
-    res.json(await api.avatars(CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.avatars(token)));
   }),
 );
 
@@ -599,7 +519,7 @@ app.get(
   "/api/avatars/:id",
   route(async (req, res) => {
     const id = encodeURIComponent(req.params.id);
-    res.json(await api.avatar(id, CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.avatar(id, token)));
   }),
 );
 
@@ -608,14 +528,14 @@ app.get(
   "/api/avatars/:id/motions",
   route(async (req, res) => {
     const id = encodeURIComponent(req.params.id);
-    res.json(await api.avatarMotions(id, CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.avatarMotions(id, token)));
   }),
 );
 
 app.get(
   "/api/scenes",
   route(async (_req, res) => {
-    res.json(await api.scenes(CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.scenes(token)));
   }),
 );
 
@@ -623,23 +543,96 @@ app.get(
   "/api/scenes/:id",
   route(async (req, res) => {
     const id = encodeURIComponent(req.params.id);
-    res.json(await api.scene(id, CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.scene(id, token)));
   }),
 );
 
-// Base URL and model both follow LLM_PROVIDER — keep the pair together when
-// adding one, or an unset LLM_MODEL sends the wrong provider's model name.
-const LLM_DEFAULTS = {
-  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  anthropic: {
-    baseUrl: "https://api.anthropic.com",
-    model: "claude-sonnet-4-20250514",
+// POST /api/demo-script
+// Request: { avatarId: string, prompt: string }
+// Returns: { reply: string, script: string, motions: [{ id, name }] }
+// The server owns the motion catalog so an LLM cannot invent IDs supplied by
+// the browser. The returned Motion Markup is validated before it is exposed.
+const MOTION_TAG_CANDIDATE_RE = /\[MOTION\b[^\]]*(?:\]|$)/gi;
+const MOTION_TAG_RE = /^\[MOTION\s+([^\s:;\]]+):\d+(?:;([^\s:;\]]+):\d+)?\]$/i;
+
+function parseAndValidateMotionIds(script) {
+  const candidates = [...script.matchAll(MOTION_TAG_CANDIDATE_RE)].map(
+    ([match]) => match,
+  );
+  const malformedTags = candidates.filter((candidate) => {
+    const match = MOTION_TAG_RE.exec(candidate);
+    MOTION_TAG_RE.lastIndex = 0;
+    return !match;
+  });
+  if (malformedTags.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Generated script contains malformed Motion Markup: ${malformedTags.join(", ")}`,
+      ),
+      { status: 502 },
+    );
+  }
+  return candidates.flatMap((candidate) => {
+    const match = MOTION_TAG_RE.exec(candidate);
+    MOTION_TAG_RE.lastIndex = 0;
+    return [match[1], match[2]].filter(Boolean);
+  });
+}
+
+function validateDemoScript(script, motions) {
+  if (typeof script !== "string" || !script.trim()) {
+    throw Object.assign(
+      new Error("LLM response must include a non-empty script."),
+      {
+        status: 502,
+      },
+    );
+  }
+  if (script.length > 4000) {
+    throw Object.assign(new Error("Generated script is too long."), {
+      status: 502,
+    });
+  }
+
+  const motionIds = new Set(motions.map(({ id }) => id));
+  const unknownMotionIds = parseAndValidateMotionIds(script).filter(
+    (id) => !motionIds.has(id),
+  );
+  if (unknownMotionIds.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Generated script contains unknown motion IDs: ${[...new Set(unknownMotionIds)].join(", ")}`,
+      ),
+      { status: 502 },
+    );
+  }
+  return script.trim();
+}
+
+function parseJsonObject(text) {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  return JSON.parse(cleaned);
+}
+
+const DEMO_SCRIPT_JSON_SCHEMA = {
+  name: "presenter_script",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["reply", "script"],
+    properties: {
+      reply: { type: "string" },
+      script: { type: "string" },
+    },
   },
 };
 
-function llmRequestConfig(messages) {
-  const fallback = LLM_DEFAULTS[LLM_PROVIDER] ?? LLM_DEFAULTS.openai;
-  const model = process.env.LLM_MODEL ?? fallback.model;
+function llmRequestConfig(messages, responseFormat) {
+  const model = process.env.LLM_MODEL ?? "gpt-4o-mini";
   if (LLM_PROVIDER === "anthropic") {
     const system = messages
       .filter(({ role }) => role === "system")
@@ -649,7 +642,7 @@ function llmRequestConfig(messages) {
       .filter(({ role }) => role !== "system")
       .map(({ role, content }) => ({ role, content }));
     return {
-      url: `${process.env.LLM_BASE_URL ?? fallback.baseUrl}/v1/messages`,
+      url: `${process.env.LLM_BASE_URL ?? "https://api.anthropic.com"}/v1/messages`,
       headers: {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -660,27 +653,37 @@ function llmRequestConfig(messages) {
         max_tokens: 1024,
         ...(system ? { system } : {}),
         messages: userMessages,
+        ...(responseFormat?.json_schema
+          ? {
+              output_config: {
+                format: {
+                  type: "json_schema",
+                  schema: responseFormat.json_schema.schema,
+                },
+              },
+            }
+          : {}),
       },
     };
   }
   return {
-    url: `${process.env.LLM_BASE_URL ?? fallback.baseUrl}/chat/completions`,
+    url: `${process.env.LLM_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${LLM_API_KEY}`,
     },
-    body: { model, messages },
+    body: { model, messages, response_format: responseFormat },
   };
 }
 
-async function requestLlmCompletion(messages) {
+async function requestLlmCompletion(messages, responseFormat) {
   if (LLM_PROVIDER !== "openai" && LLM_PROVIDER !== "anthropic") {
     throw Object.assign(
       new Error("LLM_PROVIDER must be either 'openai' or 'anthropic'."),
       { status: 500 },
     );
   }
-  const request = llmRequestConfig(messages);
+  const request = llmRequestConfig(messages, responseFormat);
   const response = await fetch(request.url, {
     method: "POST",
     headers: request.headers,
@@ -714,6 +717,105 @@ function openAiCompatibleResponse(payload) {
   };
 }
 
+function buildDemoScriptPrompt(prompt, motions) {
+  return [
+    'Return JSON only with exactly this shape: {"reply":"short explanation","script":"avatar dialogue with optional Motion Markup"}.',
+    "Create a short speaking script for an avatar. Use only motion IDs from the supplied catalog.",
+    "Motion syntax is [MOTION motion-id:1]. Never invent an ID. Do not put planning notes in script.",
+    `Available motions: ${JSON.stringify(motions)}`,
+  ].join("\n");
+}
+
+app.post(
+  "/api/demo-script",
+  route(async (req, res) => {
+    const avatarId = req.body?.avatarId;
+    const prompt = req.body?.prompt;
+    if (typeof avatarId !== "string" || !avatarId.trim()) {
+      res.status(400).json({ error: "'avatarId' is required." });
+      return;
+    }
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      res.status(400).json({ error: "'prompt' is required." });
+      return;
+    }
+    if (prompt.length > 2000) {
+      res
+        .status(400)
+        .json({ error: "'prompt' must be 2000 characters or fewer." });
+      return;
+    }
+
+    const page = await authedCall((token) =>
+      api.avatarMotions(avatarId, token),
+    );
+    const motions = (page.items ?? [])
+      .map((motion) => ({
+        id: motion.id ?? motion.motion_id,
+        name: motion.name,
+      }))
+      .filter(
+        ({ id, name }) => typeof id === "string" && typeof name === "string",
+      );
+    if (motions.length === 0) {
+      res
+        .status(422)
+        .json({ error: "The selected avatar has no usable motions." });
+      return;
+    }
+
+    let demoScriptResult;
+    if (USE_MOCK) {
+      const motion =
+        motions.find(({ id }) => id === DEMO_DEFAULTS.motionId) ?? motions[0];
+      demoScriptResult = {
+        reply:
+          "Created a deterministic demo script from the selected motion catalog.",
+        script: `Hello! [MOTION ${motion.id}:1] It is great to meet you.`,
+      };
+    } else {
+      if (!process.env.LLM_API_KEY) {
+        res.status(501).json({
+          error:
+            "LLM_API_KEY not configured. Set it in .env to enable script generation.",
+        });
+        return;
+      }
+      const payload = await requestLlmCompletion(
+        [
+          { role: "system", content: buildDemoScriptPrompt(prompt, motions) },
+          { role: "user", content: prompt.trim() },
+        ],
+        { type: "json_schema", json_schema: DEMO_SCRIPT_JSON_SCHEMA },
+      );
+      const content = llmResponseText(payload);
+      if (typeof content !== "string") {
+        throw Object.assign(
+          new Error("LLM response did not include message content."),
+          {
+            status: 502,
+          },
+        );
+      }
+      demoScriptResult = parseJsonObject(content);
+    }
+
+    if (
+      typeof demoScriptResult.reply !== "string" ||
+      !demoScriptResult.reply.trim()
+    ) {
+      throw Object.assign(
+        new Error("LLM response must include a non-empty reply."),
+        {
+          status: 502,
+        },
+      );
+    }
+    const script = validateDemoScript(demoScriptResult.script, motions);
+    res.json({ reply: demoScriptResult.reply.trim(), script, motions });
+  }),
+);
+
 // ── Chatbot routes ──────────────────────────────────────────────────────────
 // GET    /api/chatbots              → Page { items: [{ id, name, status }] }
 // POST   /api/chatbots              → ChatBotDetailResponse (201 proxied as 200)
@@ -734,7 +836,7 @@ app.get(
         .json({ error: "Chatbot API is not available in mock mode." });
       return;
     }
-    res.json(await api.listChatbots(CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.listChatbots(token)));
   }),
 );
 
@@ -752,9 +854,8 @@ app.post(
       res.status(400).json({ error: "'name' is required." });
       return;
     }
-    const created = await api.createChatbot(
-      { name, custom_instructions, tools },
-      CONNECT_SECRET_KEY,
+    const created = await authedCall((token) =>
+      api.createChatbot({ name, custom_instructions, tools }, token),
     );
     // upstream returns 201; surface as 200 for consistent demo fetch handling
     res.json(created);
@@ -771,7 +872,7 @@ app.get(
       return;
     }
     const id = req.params.id;
-    res.json(await api.getChatbot(id, CONNECT_SECRET_KEY));
+    res.json(await authedCall((token) => api.getChatbot(id, token)));
   }),
 );
 
@@ -788,10 +889,12 @@ app.patch(
     const { name, custom_instructions, tools, remove_knowledge } =
       req.body ?? {};
     res.json(
-      await api.updateChatbot(
-        id,
-        { name, custom_instructions, tools, remove_knowledge },
-        CONNECT_SECRET_KEY,
+      await authedCall((token) =>
+        api.updateChatbot(
+          id,
+          { name, custom_instructions, tools, remove_knowledge },
+          token,
+        ),
       ),
     );
   }),
@@ -807,7 +910,7 @@ app.delete(
       return;
     }
     const id = req.params.id;
-    await api.deleteChatbot(id, CONNECT_SECRET_KEY);
+    await authedCall((token) => api.deleteChatbot(id, token));
     res.status(204).end();
   }),
 );
@@ -891,12 +994,8 @@ app.post(
 
     const buffer = Buffer.from(content_base64, "base64");
     res.json(
-      await api.uploadChatbotKnowledge(
-        id,
-        buffer,
-        filename,
-        effectiveMime,
-        CONNECT_SECRET_KEY,
+      await authedCall((token) =>
+        api.uploadChatbotKnowledge(id, buffer, filename, effectiveMime, token),
       ),
     );
   }),
@@ -915,36 +1014,12 @@ app.delete(
     }
     const id = req.params.id;
     res.json(
-      await api.updateChatbot(
-        id,
-        { remove_knowledge: true },
-        CONNECT_SECRET_KEY,
+      await authedCall((token) =>
+        api.updateChatbot(id, { remove_knowledge: true }, token),
       ),
     );
   }),
 );
-
-// Both chat routes are unauthenticated and spend something — LLM_API_KEY's
-// provider, or the Connect account's quota — so both carry this cap.
-const CHAT_MAX_MESSAGES = 40; // Studio sends at most 21 (1 system + 20 history)
-const CHAT_MAX_TOTAL_CHARS = 24_000;
-
-/** @returns {string|null} why the payload is refused — handles `content` and `parts`. */
-function chatPayloadError(messages) {
-  if (!Array.isArray(messages) || messages.length === 0)
-    return "'messages' must be a non-empty array.";
-  if (messages.length > CHAT_MAX_MESSAGES)
-    return `'messages' must contain ${CHAT_MAX_MESSAGES} entries or fewer.`;
-  const totalChars = messages.reduce((sum, { content, parts }) => {
-    if (typeof content === "string") return sum + content.length;
-    if (content !== undefined)
-      return sum + JSON.stringify(content ?? "").length;
-    return sum + JSON.stringify(parts ?? "").length;
-  }, 0);
-  return totalChars > CHAT_MAX_TOTAL_CHARS
-    ? `'messages' must total ${CHAT_MAX_TOTAL_CHARS} characters or fewer.`
-    : null;
-}
 
 app.post(
   "/api/chatbots/:id/chat",
@@ -957,12 +1032,13 @@ app.post(
     }
     const id = req.params.id;
     const messages = req.body?.messages;
-    const invalid = chatPayloadError(messages);
-    if (invalid) {
-      res.status(400).json({ error: invalid });
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: "'messages' must be a non-empty array." });
       return;
     }
-    res.json(await api.chatWithChatbot(id, messages, CONNECT_SECRET_KEY));
+    res.json(
+      await authedCall((token) => api.chatWithChatbot(id, messages, token)),
+    );
   }),
 );
 
@@ -971,14 +1047,7 @@ app.post(
 // Returns: the OpenAI-compatible chat-completion JSON from the configured endpoint.
 // Errors:  501 until LLM_API_KEY is set · 502 LLM upstream unreachable.
 // Note: chat talks directly to the configured LLM endpoint, not the Connect API,
-// so it does not send CONNECT_SECRET_KEY.
-// The size caps below are the only thing standing between this route and an
-// unbounded bill: it forwards whatever the browser sends to an endpoint the
-// operator pays for, and there is no auth in front of it. The route the demo
-// used to call (/api/demo-script) capped the prompt at 2000 characters and
-// built the system message server-side; Studio's own-LLM source hands the
-// browser the whole array, so the ceiling has to be re-stated here.
-// A demo-grade guard, not a rate limiter — see README's Limitations.
+// so it does not go through authedCall().
 app.post("/api/chat", async (req, res) => {
   if (!process.env.LLM_API_KEY) {
     res.status(501).json({
@@ -987,9 +1056,10 @@ app.post("/api/chat", async (req, res) => {
     return;
   }
   const messages = req.body?.messages;
-  const invalid = chatPayloadError(messages);
-  if (invalid) {
-    res.status(400).json({ error: invalid });
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({
+      error: "Request body must include a non-empty 'messages' array.",
+    });
     return;
   }
   try {
@@ -1018,9 +1088,6 @@ app.listen(PORT, () => {
       status === "unreachable" ? " — check PERXONA_API_BASE_URL" : "";
     console.log(`  API  : ${icon} ${status}  ${PERXONA_API_BASE_URL}${hint}`);
   });
-  // Fire-and-forget, so the picked ids reach the startup log and the first
-  // visitor skips the catalog round-trip. Failures are handled inside.
-  if (!USE_MOCK) resolveEmbedConfig();
   checkPresenter().then((status) => {
     const icon = CHECK_ICONS[status] ?? "✗";
     const hint =

@@ -39,6 +39,183 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/auth/forgot-password:
+    post:
+      tags:
+        - connect
+      summary: Start a Connect forgot-password flow
+      description: |-
+        Send a password-reset email without exposing whether the user exists.
+
+        ## Rate Limit 
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: post_v1_connect_connect_forgot_password
+      parameters:
+        - name: lang
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - $ref: '#/components/schemas/Language'
+              - type: 'null'
+            title: Lang
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/auth/reset-password:
+    post:
+      tags:
+        - connect
+      summary: Reset a Connect user's password from a forgot-password token
+      description: |-
+        Reset a password without issuing a Connect access token.
+
+        ## Rate Limit 
+        This endpoint is limit __5 calls / 60 seconds__
+      operationId: post_v1_connect_connect_reset_password
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/auth/signup:
+    post:
+      tags:
+        - connect
+      summary: Start a token-only Connect sign-up flow
+      description: |-
+        Send a Connect sign-up token without sending a browser URL.
+
+        ## Rate Limit 
+        This endpoint is limit __10 calls / 60 seconds__
+      operationId: post_v1_connect_connect_signup
+      parameters:
+        - name: lang
+          in: query
+          required: false
+          schema:
+            anyOf:
+              - $ref: '#/components/schemas/Language'
+              - type: 'null'
+            title: Lang
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectSignupRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '409':
+          description: A confirmed account already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '429':
+          description: Too many sign-up requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/connect/auth/confirm-signup:
+    post:
+      tags:
+        - connect
+      summary: Complete a Connect sign-up and issue an access token
+      description: |-
+        Confirm a Connect sign-up token and return a Connect JWT.
+
+        ## Rate Limit 
+        This endpoint is limit __10 calls / 60 seconds__
+      operationId: post_v1_connect_confirm_connect_signup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectConfirmSignupRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectLoginResponse'
+        '400':
+          description: The token is invalid or not a sign-up token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The token belongs to a different sign-up flow (e.g. a web sign-up token).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The user has already completed sign-up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: The token has expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '429':
+          description: Too many confirmation requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/connect/auth/logout:
     post:
       tags:
@@ -53,6 +230,139 @@ paths:
           description: Successful Response
       security:
         - HTTPBearer: []
+  /api/v1/connect/api-keys:
+    post:
+      tags:
+        - connect
+      summary: Create a Connect API key
+      description: >-
+        Create an API key for the caller's organization. The full key is returned once in this response and cannot be
+        retrieved again. Restricted to the organization owner.
+
+
+        ## Rate Limit 
+
+        This endpoint is limit __10 calls / 1 seconds__
+      operationId: post_v1_connect_create_connect_api_key
+      security:
+        - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectAPIKeyCreateRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectAPIKeyCreatedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+        - connect
+      summary: List Connect API keys
+      description: >-
+        Return a paginated list of the organization's active API keys, newest first. Restricted to the organization
+        owner.
+      operationId: get_v1_connect_list_connect_api_keys
+      security:
+        - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            title: Page
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            default: 50
+            title: Size
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_ConnectAPIKeyResponse_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/connect/api-keys/{key_id}:
+    delete:
+      tags:
+        - connect
+      summary: Revoke a Connect API key
+      description: |-
+        Revoke an API key. It stops authenticating on the next request. Restricted to the organization owner.
+
+        ## Rate Limit 
+        This endpoint is limit __10 calls / 1 seconds__
+      operationId: delete_v1_connect_revoke_connect_api_key
+      security:
+        - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Key Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/connect/assets/avatars:
     get:
       tags:
@@ -348,11 +658,14 @@ paths:
     post:
       tags:
         - connect
-      summary: Upload and publish a Three.js VRM avatar
-      description: |-
-        Accepts, validates, and stores a VRM file, then publishes an active Three.js avatar.
+      summary: Upload a VRM file for later avatar processing
+      description: >-
+        Accepts, validates, and stores a VRM file, then creates an inactive avatar asset with a staging revision. The
+        uploaded avatar is not available through Connect until a later processing flow publishes it.
+
 
         ## Rate Limit 
+
         This endpoint is limit __5 calls / 60 seconds__
       operationId: post_v1_connect_upload_vrm
       security:
@@ -1054,10 +1367,6 @@ components:
             - type: 'null'
           title: Avatar Name
           description: Display name for the uploaded avatar. Defaults to the VRM filename if omitted.
-        lod:
-          $ref: '#/components/schemas/AssetLOD'
-          description: Target LOD for the uploaded avatar. Only lod0 is currently supported.
-          default: lod0
       type: object
       required:
         - vrm_file
@@ -1110,6 +1419,142 @@ components:
         - status
       title: ChatBotSummaryResponse
       description: Lightweight chat bot summary, used for the list endpoint.
+    ConnectAPIKeyCreatedResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        scopes:
+          items:
+            $ref: '#/components/schemas/ConnectAPIKeyScope'
+          type: array
+          title: Scopes
+        allowed_domains:
+          items:
+            type: string
+          type: array
+          title: Allowed Domains
+        expires_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Expires At
+        expires_in_seconds:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          title: Expires In Seconds
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        key:
+          type: string
+          title: Key
+      type: object
+      required:
+        - id
+        - name
+        - scopes
+        - allowed_domains
+        - expires_at
+        - expires_in_seconds
+        - created_at
+        - key
+      title: ConnectAPIKeyCreatedResponse
+      description: A newly created key. ``key`` is returned here and never again.
+    ConnectAPIKeyCreateRequest:
+      properties:
+        name:
+          type: string
+          maxLength: 50
+          minLength: 1
+          title: Name
+        scopes:
+          items:
+            $ref: '#/components/schemas/ConnectAPIKeyScope'
+          type: array
+          minItems: 1
+          title: Scopes
+        allowed_domains:
+          items:
+            type: string
+          type: array
+          title: Allowed Domains
+          default: []
+        expires_in_seconds:
+          anyOf:
+            - type: integer
+              maximum: 31536000
+              exclusiveMinimum: 0
+            - type: 'null'
+          title: Expires In Seconds
+      type: object
+      required:
+        - name
+        - scopes
+      title: ConnectAPIKeyCreateRequest
+    ConnectAPIKeyResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        scopes:
+          items:
+            $ref: '#/components/schemas/ConnectAPIKeyScope'
+          type: array
+          title: Scopes
+        allowed_domains:
+          items:
+            type: string
+          type: array
+          title: Allowed Domains
+        expires_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Expires At
+        expires_in_seconds:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          title: Expires In Seconds
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+        - id
+        - name
+        - scopes
+        - allowed_domains
+        - expires_at
+        - expires_in_seconds
+        - created_at
+      title: ConnectAPIKeyResponse
+      description: A Connect API key. Never includes the key string or its hash.
+    ConnectAPIKeyScope:
+      type: string
+      enum:
+        - presentation:generate
+        - tts_token:generate
+        - asset:list
+        - asset:get
+        - asset:upload
+        - voice:list
+        - voice:get
+        - chatbot:chat
+      title: ConnectAPIKeyScope
+      description: What a key is allowed to do, one value per Connect endpoint action.
     ConnectAvatarDetailResponse:
       properties:
         avatar_id:
@@ -1441,6 +1886,24 @@ components:
         - response
       title: ConnectChatBotToolSettingsDO
       description: HTTP API specification returned for a Connect-managed tool.
+    ConnectConfirmSignupRequest:
+      properties:
+        token:
+          type: string
+          title: Token
+        username:
+          type: string
+          title: Username
+        password:
+          type: string
+          title: Password
+      type: object
+      required:
+        - token
+        - username
+        - password
+      title: ConnectConfirmSignupRequest
+      description: The request to complete a Connect email sign-up flow.
     ConnectGoogleAudioConfig:
       properties:
         audioEncoding:
@@ -1745,16 +2208,6 @@ components:
           description: >-
             Identifier for the voice model used by the presenter widget. Null in BYO TTS mode (request omitted
             voice_id).
-        posture_style:
-          anyOf:
-            - $ref: '#/components/schemas/PostureStyle'
-            - type: 'null'
-          description: >-
-            Turn-level emotion posture style for the 3D avatar (GH-2718): the client applies a small persistent
-            rotation-only posture offset (spine/shoulder/head) on top of whatever gesture clip plays. ``null`` means no
-            posture styling for this performance; ``intensity=neutral`` is a medium gain, NOT 'no posture'. Connect
-            note: this is the EFFECTIVE style resolved against the org's emotion-posture flag — NOT an echo of the
-            request; null when the flag is off or the request carried no emotion.
       type: object
       required:
         - display_text
@@ -1763,7 +2216,6 @@ components:
         - speech_format
         - language
         - voice_name
-        - posture_style
       title: ConnectPresentationResponse
       description: Presentation payload returned to Connect SDK consumers.
     ConnectSceneDetailResponse:
@@ -1805,6 +2257,17 @@ components:
         - tags
         - lod_urls
       title: ConnectSceneDetailResponse
+    ConnectSignupRequest:
+      properties:
+        email:
+          type: string
+          format: email
+          title: Email
+      type: object
+      required:
+        - email
+      title: ConnectSignupRequest
+      description: The request to start a Connect email sign-up flow.
     ConnectVoiceResponse:
       properties:
         id:
@@ -1871,11 +2334,12 @@ components:
         - avatar_id
       title: ConnectVRMUploadResponse
       description: |-
-        Result of a successful VRM upload: the active avatar's asset ID.
+        Result of a successful raw VRM upload: the inactive avatar's asset ID.
 
         Only `avatar_id` is returned, matching the existing Connect API convention
         (``ConnectListAvatarResponse``/``ConnectAvatarDetailResponse``) of never
-        exposing internal revision IDs to Connect clients.
+        exposing internal revision IDs to Connect clients. The asset remains
+        inactive until a later processing flow publishes a usable revision.
     DateRangeStrEnum:
       type: string
       enum:
@@ -1884,6 +2348,17 @@ components:
         - past_30_days
         - custom
       title: DateRangeStrEnum
+    EmailRequest:
+      properties:
+        email:
+          type: string
+          format: email
+          title: Email
+      type: object
+      required:
+        - email
+      title: EmailRequest
+      description: The validated email address
     EmotionCategory:
       type: string
       enum:
@@ -1901,6 +2376,182 @@ components:
         - realization
         - confusion
       title: EmotionCategory
+    Error:
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+          default: 1
+        details:
+          type: string
+          title: Details
+          default: Unknown error
+        payload:
+          additionalProperties: true
+          type: object
+          title: Payload
+        http_status_code:
+          type: integer
+          title: Http Status Code
+          default: 500
+      type: object
+      title: Error
+      description: The base schema class the all error response should inherit from
+    ErrorCode:
+      type: integer
+      enum:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 1000
+        - 1001
+        - 1002
+        - 1003
+        - 1004
+        - 1005
+        - 1006
+        - 1007
+        - 1008
+        - 2000
+        - 2001
+        - 2002
+        - 3000
+        - 3001
+        - 3002
+        - 3003
+        - 3004
+        - 3005
+        - 3006
+        - 3007
+        - 3008
+        - 3009
+        - 3010
+        - 3011
+        - 3012
+        - 3013
+        - 3014
+        - 3015
+        - 3016
+        - 4000
+        - 4001
+        - 5000
+        - 5001
+        - 5002
+        - 5003
+        - 5004
+        - 5005
+        - 5006
+        - 5007
+        - 5008
+        - 5009
+        - 5010
+        - 5011
+        - 5012
+        - 5013
+        - 5014
+        - 5015
+        - 5016
+        - 5017
+        - 5100
+        - 5101
+        - 5102
+        - 5103
+        - 5104
+        - 5105
+        - 5106
+        - 5200
+        - 5300
+        - 6000
+        - 6001
+        - 6002
+        - 6003
+        - 6004
+        - 6005
+        - 7000
+        - 7001
+        - 7002
+        - 7003
+        - 7004
+        - 7005
+        - 7006
+        - 7008
+        - 7009
+        - 8000
+        - 8001
+        - 8002
+        - 8003
+        - 9000
+        - 9001
+        - 9002
+        - 10000
+        - 10001
+        - 10002
+        - 10003
+        - 10004
+        - 10005
+        - 10006
+        - 10007
+        - 10008
+        - 11000
+        - 11001
+        - 12000
+        - 12001
+        - 13000
+        - 13001
+        - 13002
+        - 14000
+        - 14001
+        - 14002
+        - 14003
+        - 14004
+        - 14005
+        - 15000
+        - 15001
+        - 15002
+        - 15003
+        - 15004
+        - 15005
+        - 15006
+        - 15007
+        - 15008
+        - 15009
+        - 15010
+        - 15011
+        - 15012
+        - 15013
+        - 15014
+        - 15015
+        - 16000
+        - 16001
+        - 16002
+        - 17000
+        - 17001
+        - 18000
+        - 18001
+        - 18002
+        - 18003
+        - 18004
+        - 19000
+        - 19001
+        - 20000
+        - 20001
+        - 20002
+        - 20003
+        - 20004
+        - 20005
+        - 20006
+        - 20007
+        - 21000
+        - 21001
+        - 21002
+        - 21003
+        - 22000
+        - 22001
+      title: ErrorCode
+      description: |-
+        Define the error codes for error responses.
+        All codes ending in 0 represent undefined error codes.
     HTTPValidationError:
       properties:
         detail:
@@ -2028,6 +2679,37 @@ components:
         - size
         - pages
       title: Page[ChatBotSummaryResponse]
+    Page_ConnectAPIKeyResponse_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ConnectAPIKeyResponse'
+          type: array
+          title: Items
+        total:
+          type: integer
+          minimum: 0
+          title: Total
+        page:
+          type: integer
+          minimum: 1
+          title: Page
+        size:
+          type: integer
+          minimum: 1
+          title: Size
+        pages:
+          type: integer
+          minimum: 0
+          title: Pages
+      type: object
+      required:
+        - items
+        - total
+        - page
+        - size
+        - pages
+      title: Page[ConnectAPIKeyResponse]
     Page_ConnectListAvatarResponse_:
       properties:
         items:
@@ -2152,45 +2834,24 @@ components:
         - size
         - pages
       title: Page[ConnectVoiceResponse]
-    PostureStyle:
-      $defs:
-        EmotionCategory:
-          enum:
-            - joy
-            - excitement
-            - admiration
-            - caring
-            - gratitude
-            - sadness
-            - disappointment
-            - annoyance
-            - embarrassment
-            - curiosity
-            - surprise
-            - realization
-            - confusion
-          title: EmotionCategory
-          type: string
-        IntensityCategory:
-          enum:
-            - low
-            - neutral
-            - high
-          title: IntensityCategory
-          type: string
-      description: 'The emotion posture for one performance: which emotion styles the avatar''s body posture, and how strongly.'
+    ResetPasswordRequest:
       properties:
-        emotion:
-          $ref: '#/components/schemas/EmotionCategory'
-          description: Canonical turn-level emotion driving the posture envelope.
-        intensity:
-          $ref: '#/components/schemas/IntensityCategory'
-          description: Posture gain tier; ``neutral`` is medium, not off.
-      required:
-        - emotion
-        - intensity
-      title: PostureStyle
+        token:
+          type: string
+          title: Token
+        new_password:
+          type: string
+          title: New Password
+        confirm_password:
+          type: string
+          title: Confirm Password
       type: object
+      required:
+        - token
+        - new_password
+        - confirm_password
+      title: ResetPasswordRequest
+      description: The change password request schema
     SceneThumbnailType:
       type: string
       enum:
