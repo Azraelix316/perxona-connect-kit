@@ -2,8 +2,8 @@
 
 Minimal sample apps for building with Perxona Connect.
 
-> All samples and tools in this repository use a Perxona Connect account. Sign up on the Perxona console — there is no
-> sign-up API. See [`samples/express/README.md`](samples/express/README.md) for the full steps.
+> All samples and tools in this repository use a Perxona Connect account. Sign up at <https://console.perxona.ai> — there is
+> no sign-up API. See [`samples/express/README.md`](samples/express/README.md) for the full steps.
 
 ## Samples
 
