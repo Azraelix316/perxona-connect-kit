@@ -39,183 +39,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /api/v1/connect/auth/forgot-password:
-    post:
-      tags:
-        - connect
-      summary: Start a Connect forgot-password flow
-      description: |-
-        Send a password-reset email without exposing whether the user exists.
-
-        ## Rate Limit 
-        This endpoint is limit __5 calls / 60 seconds__
-      operationId: post_v1_connect_connect_forgot_password
-      parameters:
-        - name: lang
-          in: query
-          required: false
-          schema:
-            anyOf:
-              - $ref: '#/components/schemas/Language'
-              - type: 'null'
-            title: Lang
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/EmailRequest'
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-  /api/v1/connect/auth/reset-password:
-    post:
-      tags:
-        - connect
-      summary: Reset a Connect user's password from a forgot-password token
-      description: |-
-        Reset a password without issuing a Connect access token.
-
-        ## Rate Limit 
-        This endpoint is limit __5 calls / 60 seconds__
-      operationId: post_v1_connect_connect_reset_password
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ResetPasswordRequest'
-        required: true
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-  /api/v1/connect/auth/signup:
-    post:
-      tags:
-        - connect
-      summary: Start a token-only Connect sign-up flow
-      description: |-
-        Send a Connect sign-up token without sending a browser URL.
-
-        ## Rate Limit 
-        This endpoint is limit __10 calls / 60 seconds__
-      operationId: post_v1_connect_connect_signup
-      parameters:
-        - name: lang
-          in: query
-          required: false
-          schema:
-            anyOf:
-              - $ref: '#/components/schemas/Language'
-              - type: 'null'
-            title: Lang
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ConnectSignupRequest'
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '409':
-          description: A confirmed account already exists.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-        '429':
-          description: Too many sign-up requests.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-  /api/v1/connect/auth/confirm-signup:
-    post:
-      tags:
-        - connect
-      summary: Complete a Connect sign-up and issue an access token
-      description: |-
-        Confirm a Connect sign-up token and return a Connect JWT.
-
-        ## Rate Limit 
-        This endpoint is limit __10 calls / 60 seconds__
-      operationId: post_v1_connect_confirm_connect_signup
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ConnectConfirmSignupRequest'
-        required: true
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ConnectLoginResponse'
-        '400':
-          description: The token is invalid or not a sign-up token.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: The token belongs to a different sign-up flow (e.g. a web sign-up token).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: The user has already completed sign-up.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '410':
-          description: The token has expired.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-        '429':
-          description: Too many confirmation requests.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
   /api/v1/connect/auth/logout:
     post:
       tags:
@@ -241,6 +64,7 @@ paths:
       operationId: get_v1_connect_list_avatars
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: page
           in: query
@@ -271,6 +95,14 @@ paths:
           schema:
             $ref: '#/components/schemas/SortDirection'
             default: desc
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -293,6 +125,7 @@ paths:
       operationId: get_v1_connect_get_avatar
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: avatar_id
           in: path
@@ -300,6 +133,14 @@ paths:
           schema:
             type: string
             title: Avatar Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -324,6 +165,7 @@ paths:
       operationId: get_v1_connect_list_connect_avatar_motions
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: avatar_id
           in: path
@@ -380,6 +222,14 @@ paths:
           schema:
             $ref: '#/components/schemas/SortDirection'
             default: desc
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -404,6 +254,7 @@ paths:
       operationId: get_v1_connect_list_scenes
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: page
           in: query
@@ -434,6 +285,14 @@ paths:
           schema:
             $ref: '#/components/schemas/SortDirection'
             default: desc
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -456,6 +315,7 @@ paths:
       operationId: get_v1_connect_get_scene
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: scene_id
           in: path
@@ -463,6 +323,14 @@ paths:
           schema:
             type: string
             title: Scene Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -480,23 +348,31 @@ paths:
     post:
       tags:
         - connect
-      summary: Upload a VRM file and register it as an avatar
-      description: >-
-        Accepts a VRM file, converts it to a Cocos-compatible bundle, uploads the bundle to S3, and registers the result
-        as a new active avatar asset in the caller's organization. This call blocks until conversion and upload
-        complete.
-
+      summary: Upload and publish a Three.js VRM avatar
+      description: |-
+        Accepts, validates, and stores a VRM file, then publishes an active Three.js avatar.
 
         ## Rate Limit 
-
         This endpoint is limit __5 calls / 60 seconds__
       operationId: post_v1_connect_upload_vrm
+      security:
+        - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       requestBody:
+        required: true
         content:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/Body_upload_vrm_api_v1_connect_assets_vrm_upload_post'
-        required: true
       responses:
         '200':
           description: Successful Response
@@ -510,8 +386,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      security:
-        - HTTPBearer: []
   /api/v1/connect/voices:
     get:
       tags:
@@ -528,6 +402,7 @@ paths:
       operationId: get_v1_connect_connect_list_voices
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: page
           in: query
@@ -594,6 +469,14 @@ paths:
               - $ref: '#/components/schemas/VoiceProvider'
               - type: 'null'
             title: Provider
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -623,6 +506,7 @@ paths:
       operationId: get_v1_connect_connect_get_voice_detail
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: voice_id
           in: path
@@ -630,6 +514,14 @@ paths:
           schema:
             type: string
             title: Voice Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -662,12 +554,24 @@ paths:
         ## Rate Limit 
         This endpoint is limit __5 calls / 1 seconds__
       operationId: post_v1_connect_connect_generate_text_to_speech_token
+      security:
+        - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ConnectVoiceTextToSpeechTokenRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
@@ -681,8 +585,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      security:
-        - HTTPBearer: []
   /api/v1/connect/presentation:
     post:
       tags:
@@ -698,12 +600,24 @@ paths:
 
         This endpoint is limit __10 calls / 1 seconds__
       operationId: post_v1_connect_create_presentation
+      security:
+        - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ConnectPresentationRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
@@ -717,8 +631,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      security:
-        - HTTPBearer: []
   /api/v1/connect/chatbots:
     post:
       tags:
@@ -735,6 +647,16 @@ paths:
       operationId: post_v1_connect_create_chat_bot
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
+      parameters:
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       requestBody:
         required: true
         content:
@@ -764,6 +686,7 @@ paths:
       operationId: get_v1_connect_list_chat_bots
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: page
           in: query
@@ -782,6 +705,14 @@ paths:
             minimum: 1
             default: 50
             title: Size
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -804,6 +735,7 @@ paths:
       operationId: get_v1_connect_get_chat_bot
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: chat_bot_id
           in: path
@@ -811,6 +743,14 @@ paths:
           schema:
             type: string
             title: Chat Bot Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '200':
           description: Successful Response
@@ -841,6 +781,7 @@ paths:
       operationId: patch_v1_connect_update_chat_bot
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: chat_bot_id
           in: path
@@ -848,6 +789,14 @@ paths:
           schema:
             type: string
             title: Chat Bot Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       requestBody:
         content:
           multipart/form-data:
@@ -874,6 +823,7 @@ paths:
       operationId: delete_v1_connect_delete_chat_bot
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: chat_bot_id
           in: path
@@ -881,6 +831,14 @@ paths:
           schema:
             type: string
             title: Chat Bot Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       responses:
         '204':
           description: Successful Response
@@ -895,9 +853,15 @@ paths:
       tags:
         - connect
       summary: Send a message to a chat bot
+      description: |-
+        The organization's `chat_rate_limit` feature toggle can override the rate limit below.
+
+        ## Rate Limit 
+        This endpoint is limit __30 calls / 60 seconds__
       operationId: post_v1_connect_chat_with_chat_bot
       security:
         - HTTPBearer: []
+        - ConnectAPIKey: []
       parameters:
         - name: chat_bot_id
           in: path
@@ -905,6 +869,14 @@ paths:
           schema:
             type: string
             title: Chat Bot Id
+        - name: origin
+          in: header
+          required: false
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Origin
       requestBody:
         required: true
         content:
@@ -924,11 +896,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      description: |-
-
-
-        ## Rate Limit 
-        This endpoint is limit __30 calls / 60 seconds__
 components:
   schemas:
     AssetLOD:
@@ -1086,7 +1053,11 @@ components:
               maxLength: 256
             - type: 'null'
           title: Avatar Name
-          description: Display name for the new avatar. Defaults to the VRM filename if omitted.
+          description: Display name for the uploaded avatar. Defaults to the VRM filename if omitted.
+        lod:
+          $ref: '#/components/schemas/AssetLOD'
+          description: Target LOD for the uploaded avatar. Only lod0 is currently supported.
+          default: lod0
       type: object
       required:
         - vrm_file
@@ -1470,24 +1441,6 @@ components:
         - response
       title: ConnectChatBotToolSettingsDO
       description: HTTP API specification returned for a Connect-managed tool.
-    ConnectConfirmSignupRequest:
-      properties:
-        token:
-          type: string
-          title: Token
-        username:
-          type: string
-          title: Username
-        password:
-          type: string
-          title: Password
-      type: object
-      required:
-        - token
-        - username
-        - password
-      title: ConnectConfirmSignupRequest
-      description: The request to complete a Connect email sign-up flow.
     ConnectGoogleAudioConfig:
       properties:
         audioEncoding:
@@ -1792,6 +1745,16 @@ components:
           description: >-
             Identifier for the voice model used by the presenter widget. Null in BYO TTS mode (request omitted
             voice_id).
+        posture_style:
+          anyOf:
+            - $ref: '#/components/schemas/PostureStyle'
+            - type: 'null'
+          description: >-
+            Turn-level emotion posture style for the 3D avatar (GH-2718): the client applies a small persistent
+            rotation-only posture offset (spine/shoulder/head) on top of whatever gesture clip plays. ``null`` means no
+            posture styling for this performance; ``intensity=neutral`` is a medium gain, NOT 'no posture'. Connect
+            note: this is the EFFECTIVE style resolved against the org's emotion-posture flag — NOT an echo of the
+            request; null when the flag is off or the request carried no emotion.
       type: object
       required:
         - display_text
@@ -1800,6 +1763,7 @@ components:
         - speech_format
         - language
         - voice_name
+        - posture_style
       title: ConnectPresentationResponse
       description: Presentation payload returned to Connect SDK consumers.
     ConnectSceneDetailResponse:
@@ -1841,17 +1805,6 @@ components:
         - tags
         - lod_urls
       title: ConnectSceneDetailResponse
-    ConnectSignupRequest:
-      properties:
-        email:
-          type: string
-          format: email
-          title: Email
-      type: object
-      required:
-        - email
-      title: ConnectSignupRequest
-      description: The request to start a Connect email sign-up flow.
     ConnectVoiceResponse:
       properties:
         id:
@@ -1918,12 +1871,11 @@ components:
         - avatar_id
       title: ConnectVRMUploadResponse
       description: |-
-        Result of a successful VRM upload: the registered avatar's asset ID.
+        Result of a successful VRM upload: the active avatar's asset ID.
 
         Only `avatar_id` is returned, matching the existing Connect API convention
         (``ConnectListAvatarResponse``/``ConnectAvatarDetailResponse``) of never
-        exposing internal revision IDs to Connect clients. Callers should follow up
-        with ``GET /assets/avatars/{avatar_id}`` for full detail (e.g. lod_urls).
+        exposing internal revision IDs to Connect clients.
     DateRangeStrEnum:
       type: string
       enum:
@@ -1932,17 +1884,6 @@ components:
         - past_30_days
         - custom
       title: DateRangeStrEnum
-    EmailRequest:
-      properties:
-        email:
-          type: string
-          format: email
-          title: Email
-      type: object
-      required:
-        - email
-      title: EmailRequest
-      description: The validated email address
     EmotionCategory:
       type: string
       enum:
@@ -1960,185 +1901,6 @@ components:
         - realization
         - confusion
       title: EmotionCategory
-    Error:
-      properties:
-        code:
-          $ref: '#/components/schemas/ErrorCode'
-          default: 1
-        details:
-          type: string
-          title: Details
-          default: Unknown error
-        payload:
-          additionalProperties: true
-          type: object
-          title: Payload
-        http_status_code:
-          type: integer
-          title: Http Status Code
-          default: 500
-      type: object
-      title: Error
-      description: The base schema class the all error response should inherit from
-    ErrorCode:
-      type: integer
-      enum:
-        - 0
-        - 1
-        - 2
-        - 3
-        - 4
-        - 1000
-        - 1001
-        - 1002
-        - 1003
-        - 1004
-        - 1005
-        - 1006
-        - 1007
-        - 1008
-        - 2000
-        - 2001
-        - 2002
-        - 3000
-        - 3001
-        - 3002
-        - 3003
-        - 3004
-        - 3005
-        - 3006
-        - 3007
-        - 3008
-        - 3009
-        - 3010
-        - 3011
-        - 3012
-        - 3013
-        - 3014
-        - 3015
-        - 3016
-        - 4000
-        - 4001
-        - 5000
-        - 5001
-        - 5002
-        - 5003
-        - 5004
-        - 5005
-        - 5006
-        - 5007
-        - 5008
-        - 5009
-        - 5010
-        - 5011
-        - 5012
-        - 5013
-        - 5014
-        - 5015
-        - 5016
-        - 5017
-        - 5100
-        - 5101
-        - 5102
-        - 5103
-        - 5104
-        - 5105
-        - 5106
-        - 5200
-        - 5300
-        - 6000
-        - 6001
-        - 6002
-        - 6003
-        - 6004
-        - 6005
-        - 7000
-        - 7001
-        - 7002
-        - 7003
-        - 7004
-        - 7005
-        - 7006
-        - 7008
-        - 7009
-        - 7010
-        - 7011
-        - 7012
-        - 8000
-        - 8001
-        - 8002
-        - 8003
-        - 9000
-        - 9001
-        - 9002
-        - 10000
-        - 10001
-        - 10002
-        - 10003
-        - 10004
-        - 10005
-        - 10006
-        - 10007
-        - 10008
-        - 11000
-        - 11001
-        - 12000
-        - 12001
-        - 13000
-        - 13001
-        - 13002
-        - 14000
-        - 14001
-        - 14002
-        - 14003
-        - 14004
-        - 14005
-        - 15000
-        - 15001
-        - 15002
-        - 15003
-        - 15004
-        - 15005
-        - 15006
-        - 15007
-        - 15008
-        - 15009
-        - 15010
-        - 15011
-        - 15012
-        - 15013
-        - 15014
-        - 15015
-        - 16000
-        - 16001
-        - 16002
-        - 17000
-        - 17001
-        - 18000
-        - 18001
-        - 18002
-        - 18003
-        - 18004
-        - 19000
-        - 19001
-        - 20000
-        - 20001
-        - 20002
-        - 20003
-        - 20004
-        - 20005
-        - 20006
-        - 20007
-        - 21000
-        - 21001
-        - 21002
-        - 21003
-        - 22000
-        - 22001
-      title: ErrorCode
-      description: |-
-        Define the error codes for error responses.
-        All codes ending in 0 represent undefined error codes.
     HTTPValidationError:
       properties:
         detail:
@@ -2390,24 +2152,45 @@ components:
         - size
         - pages
       title: Page[ConnectVoiceResponse]
-    ResetPasswordRequest:
+    PostureStyle:
+      $defs:
+        EmotionCategory:
+          enum:
+            - joy
+            - excitement
+            - admiration
+            - caring
+            - gratitude
+            - sadness
+            - disappointment
+            - annoyance
+            - embarrassment
+            - curiosity
+            - surprise
+            - realization
+            - confusion
+          title: EmotionCategory
+          type: string
+        IntensityCategory:
+          enum:
+            - low
+            - neutral
+            - high
+          title: IntensityCategory
+          type: string
+      description: 'The emotion posture for one performance: which emotion styles the avatar''s body posture, and how strongly.'
       properties:
-        token:
-          type: string
-          title: Token
-        new_password:
-          type: string
-          title: New Password
-        confirm_password:
-          type: string
-          title: Confirm Password
-      type: object
+        emotion:
+          $ref: '#/components/schemas/EmotionCategory'
+          description: Canonical turn-level emotion driving the posture envelope.
+        intensity:
+          $ref: '#/components/schemas/IntensityCategory'
+          description: Posture gain tier; ``neutral`` is medium, not off.
       required:
-        - token
-        - new_password
-        - confirm_password
-      title: ResetPasswordRequest
-      description: The change password request schema
+        - emotion
+        - intensity
+      title: PostureStyle
+      type: object
     SceneThumbnailType:
       type: string
       enum:
@@ -2474,6 +2257,11 @@ components:
         This enum represents the different regions where voice models can be deployed.
         It must match the provider Location/Region names because the Speech Cognitive API uses these names.
   securitySchemes:
+    ConnectAPIKey:
+      type: apiKey
+      description: Connect API Key to access the service
+      in: header
+      name: X-Connect-Key
     HTTPBearer:
       type: http
       scheme: bearer
