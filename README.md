@@ -5,6 +5,19 @@ Minimal sample apps for building with Perxona Connect.
 > All samples and tools in this repository use a Perxona Connect account. Sign up at <https://console.perxona.ai> — there is
 > no sign-up API. See [`samples/express/README.md`](samples/express/README.md) for the full steps.
 
+## Usage and Subscription
+
+> ⚠️ **Connect Kit is currently in Preview.** Through **2026/09/20** (subject to platform configuration), metered calls
+> (chatbot conversations) are not subject to usage-credit enforcement. Put less ceremoniously: the meter exists, but nobody
+> is sending you a bill yet.
+
+When credit enforcement starts, Connect Kit sign-ups are treated as Perxona Console **Free Plan** users by default. If that
+organization's credits are exhausted, metered calls (such as chatbot chat) fail with HTTP `400` and a body like
+`{"code": 1003, "details": "credit_points exhausted for org_id: ..."}`. At that
+point, sign in to [Perxona Console](https://console.perxona.ai/asia) (use the region matching your account — `/asia` or `/eu`)
+with your Connect account credentials (see [`samples/express/README.md`](samples/express/README.md#getting-a-connect-account)
+for sign-up steps), open the organization management page, review **Subscription**, then top up credits or upgrade the plan.
+
 ## Samples
 
 - [`samples/express/`](samples/express/) — an Express-based starter that shows the basic Connect flow. See
