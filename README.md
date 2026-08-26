@@ -12,8 +12,11 @@ Minimal sample apps for building with Perxona Connect.
 > is sending you a bill yet.
 
 When credit enforcement starts, Connect Kit sign-ups are treated as Perxona Console **Free Plan** users by default. If that
-organization's credits are exhausted, metered calls (such as chatbot chat) fail with HTTP `400` and a body like
-`{"code": 1003, "details": "credit_points exhausted for org_id: ..."}`. At that
+organization's credits are exhausted, **or its subscription itself is no longer active**, metered calls (such as chatbot
+chat) fail with the same HTTP `400` and `code: 1003`, with a body like one of these:
+`{"code": 1003, "details": "credit_points exhausted for org_id: ..."}` or
+`{"code": 1003, "details": "Subscription status is not valid for org_id: ..."}` — the `details` field is what tells the two
+apart. At that
 point, sign in to [Perxona Console](https://console.perxona.ai/asia) (use the region matching your account — `/asia` or `/eu`)
 with your Connect account credentials (see [`samples/express/README.md`](samples/express/README.md#getting-a-connect-account)
 for sign-up steps), open the organization management page, review **Subscription**, then top up credits or upgrade the plan.
