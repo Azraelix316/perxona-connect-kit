@@ -16,7 +16,8 @@ organization's credits are exhausted, **or its subscription itself is no longer 
 chat) fail with the same HTTP `400` and `code: 1003`, with a body like one of these:
 `{"code": 1003, "details": "credit_points exhausted for org_id: ..."}` or
 `{"code": 1003, "details": "Subscription status is not valid for org_id: ..."}` — the `details` field is what tells the two
-apart. At that
+apart. A third, separate case — **no subscription record for the org at all** — fails with HTTP `403` and
+`{"code": 14005, "details": "No active subscription found for org_id: ..."}` instead. At that
 point, sign in to [Perxona Console](https://console.perxona.ai/asia) (use the region matching your account — `/asia` or `/eu`)
 with your Connect account credentials (see [`samples/express/README.md`](samples/express/README.md#getting-a-connect-account)
 for sign-up steps), open the organization management page, review **Subscription**, then top up credits or upgrade the plan.
