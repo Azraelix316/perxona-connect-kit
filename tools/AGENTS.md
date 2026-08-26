@@ -6,8 +6,8 @@ starters — use them as reference clients or as a starting point for your own t
 
 ## Available Tools
 
-- [`motion-browser/`](motion-browser/) — a web UI for previewing and controlling Perxona avatars: sign in,
-  pick an avatar/scene/voice, browse and preview motions, and make the avatar speak and perform. See
+- [`motion-browser/`](motion-browser/) — a web UI for previewing and controlling Perxona avatars: pick an
+  avatar/scene/voice, browse and preview motions, and make the avatar speak and perform. See
   [`motion-browser/README.md`](motion-browser/README.md) for setup and usage, and
   [`motion-browser/AGENTS.md`](motion-browser/AGENTS.md) for its architecture and conventions.
 
