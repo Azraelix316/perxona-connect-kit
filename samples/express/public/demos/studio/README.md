@@ -236,7 +236,11 @@ Under the hood:
    Express server (up to 1 MB).
 3. The server converts the payload back to a `Buffer`, wraps it in `FormData`, and `PATCH`es the
    upstream chatbot with `knowledge_file`.
-4. The status badge updates to `Processing…` and then `Ready` once the upstream finishes indexing.
+4. Chunking and embedding happen asynchronously on the backend and can take anywhere from a few
+   seconds to a few minutes. The status badge shows `Processing…` right away, and `app.js` polls
+   `GET /api/chatbots/:id` every few seconds until it flips to `Ready` (or `Error`) — no page reload
+   needed. If it's still processing after several minutes, polling stops on its own and a **Check
+   again** button appears to resume it manually.
 
 To remove the knowledge file, click the **Remove** button — the server sends `PATCH` with
 `remove_knowledge=true`.

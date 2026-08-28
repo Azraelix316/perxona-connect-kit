@@ -652,6 +652,18 @@ details[open] summary::before {
   background: color-mix(in srgb, #ef4444 18%, transparent);
   color: #f87171;
 }
+/* Polling stopped at its timeout ceiling without reaching ready/error. */
+.knowledge-badge--stalled {
+  background: color-mix(in srgb, #94a3b8 18%, transparent);
+  color: #cbd5e1;
+}
+
+#bot-knowledge-stalled-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 
 .tools-header-actions {
   display: flex;

@@ -66,7 +66,10 @@ Chatbot CRUD routes let you create and manage Connect chatbots from the sample s
 | `POST /api/chatbots/:id/chat`        | Chat with a chatbot (`{ messages: [...] }`) → `{ id, status, reply_text }` |
 
 Create and update are forwarded as `multipart/form-data` — send plain JSON from the browser; the proxy handles re-encoding.
-Knowledge uploads accept `.txt`, `.pdf`, `.doc`, `.docx`, `.csv` files encoded as base64 in the JSON body.
+Knowledge uploads accept `.txt`, `.pdf`, `.doc`, `.docx`, `.csv` files encoded as base64 in the JSON body. Processing is
+asynchronous — the upload response's `knowledge.status` is typically still `processing`, and Studio polls
+`GET /api/chatbots/:id` to pick up the transition to `ready`/`error` rather than assuming it finished by the time the
+response came back.
 Tools (function-calling definitions for external APIs) are documented in `public/demos/studio/docs/connect-chat-bot-function-tools.md`.
 
 ### `public/demos/*/app.js` — vanilla JS, no build step

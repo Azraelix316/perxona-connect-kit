@@ -76,8 +76,10 @@ Two demos ship with the sample. Both hold a multi-turn conversation the avatar s
 the work you are looking at. **Embed** is what it looks like once it is live: a product site with an avatar answering
 questions on it, no controls and nothing on the page about its own configuration — the avatar and chatbot arrive already
 resolved. **Studio** is the console you build that from: browse the catalog, create and edit chatbots with knowledge files
-and function tools, interrupt mid-sentence, watch the SDK's events in a live timeline, and switch at runtime between a
-Connect-hosted chatbot and your own `LLM_API_KEY` — the same conversation, answered by a different model.
+(processing is asynchronous — Studio polls and shows live status once a file is uploaded, which can take anywhere from a
+few seconds to a few minutes) and function tools, interrupt mid-sentence, watch the SDK's events in a live timeline, and
+switch at runtime between a Connect-hosted chatbot and your own `LLM_API_KEY` — the same conversation, answered by a
+different model.
 
 ```text
 .

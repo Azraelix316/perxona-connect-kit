@@ -137,6 +137,16 @@
                 Copy
               </button>
             </div>
+            <!-- Mirrors #bot-knowledge-status inside the collapsible editor,
+                 so "does this chatbot have knowledge loaded" is visible
+                 without expanding Create / Edit. -->
+            <div id="bot-knowledge-indicator-row" class="bot-id-row" hidden>
+              <span class="bot-id-label">Knowledge</span>
+              <span
+                id="bot-knowledge-indicator"
+                class="knowledge-badge knowledge-badge--none"
+              ></span>
+            </div>
             <p id="bot-status" class="status"></p>
 
             <!-- Collapsible create / edit form -->
@@ -202,6 +212,23 @@
                       Remove
                     </button>
                   </div>
+                  <!-- Shown when status polling hits its timeout ceiling
+                       without reaching ready/error — see startKnowledgePolling. -->
+                  <p
+                    id="bot-knowledge-stalled-notice"
+                    class="field-hint"
+                    hidden
+                  >
+                    Still processing after a while. This can happen for larger
+                    files.
+                    <button
+                      type="button"
+                      id="bot-knowledge-poll-resume-btn"
+                      class="btn-ghost btn-sm"
+                    >
+                      Check again
+                    </button>
+                  </p>
                 </div>
 
                 <!-- ── Function Tools ─────────────────────────────────── -->
