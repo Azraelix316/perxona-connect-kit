@@ -11,9 +11,10 @@ Web UI for previewing and controlling Perxona avatars via the Connect API and `<
 
 ## Getting Started
 
-Requires **Node `>=22`** — check with `node --version`. You'll also need a Perxona Connect account to sign in; if you
-don't have one yet, see [Getting a Connect account](../../samples/express/README.md#getting-a-connect-account) for
-the sign-up steps.
+Requires **Node `>=22`** — check with `node --version`. You'll also need a Connect **publishable** API key; if you
+don't have one yet, see [Getting a Connect account](../../samples/express/README.md#getting-a-connect-account)
+for the steps (sign up, then create a key of type **Publishable** at
+[console.perxona.ai/asia/organization/integration/connect-api-keys](https://console.perxona.ai/asia/organization/integration/connect-api-keys/)).
 
 ```bash
 pnpm install
@@ -29,44 +30,45 @@ Create `.env` from the included production template:
 cp .env.example .env
 ```
 
-The template contains only the production API and presenter CDN settings:
+The template contains the production API and presenter CDN settings, plus a blank slot for your key:
 
 ```env
 VITE_PERXONA_API_BASE_URL=https://console.perxona.ai/asia
 VITE_PRESENTER_URL=https://cdn.perxona.ai/asia/prod/latest/widget/entry/presenter.js
+VITE_PERXONA_CONNECT_PUBLISHABLE_KEY=
 ```
 
 Run `cp .env.example .env` again whenever you want to recreate the local
-configuration. Edit `.env` only when using a different Perxona region or a
-custom presenter CDN. The `.env` file is ignored by Git; do not commit it.
+configuration. Edit `.env` to fill in your key, or when using a different
+Perxona region or a custom presenter CDN. The `.env` file is ignored by Git;
+do not commit it.
 
-| Variable                    | Purpose                                   |
-| --------------------------- | ----------------------------------------- |
-| `VITE_PERXONA_API_BASE_URL` | Base URL for the Perxona Connect REST API |
-| `VITE_PRESENTER_URL`        | CDN URL for the presenter engine script   |
+| Variable                               | Purpose                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `VITE_PERXONA_API_BASE_URL`            | Base URL for the Perxona Connect REST API                                                                   |
+| `VITE_PRESENTER_URL`                   | CDN URL for the presenter engine script                                                                     |
+| `VITE_PERXONA_CONNECT_PUBLISHABLE_KEY` | Connect publishable API key. Set its allowed domains before shipping — see `.env.example`'s comment for why |
 
 ## Project Structure
 
 ```text
 src/
-├── App.tsx                    # Auth gate + main layout
+├── App.tsx                    # Main layout
 ├── components/custom/         # App-specific UI components
-│   ├── app-header.tsx         # Top bar with account dropdown
-│   ├── login-screen.tsx       # Sign-in form
+│   ├── app-header.tsx         # Top bar
 │   ├── motion-library.tsx     # Motion grid with search/filter
 │   ├── preset-avatar-select.tsx # Horizontal avatar picker
 │   ├── scene-select.tsx       # Scene thumbnail selector
 │   └── script-composer.tsx    # Rich-text editor with motion chips
 ├── components/ui/             # shadcn/ui primitives
 ├── hooks/
-│   ├── use-auth.ts            # Auth state (login/logout/token)
 │   ├── use-avatar-session.ts  # Presenter lifecycle (launch/speak/playMotion)
 │   ├── use-catalog.ts         # Avatars, voices, scenes queries
 │   ├── use-motions.ts         # Motion list per avatar
 │   └── use-presenter.ts       # Imperative <sv-presenter> handle
 ├── lib/
-│   ├── api.ts                 # REST client with auto-401 logout
-│   ├── auth.ts                # Token store (memory + sessionStorage)
+│   ├── api.ts                 # REST client, authenticates with X-Connect-Key
+│   ├── env.ts                 # Env var access, including the connect key
 │   └── presenter.ts           # CDN script loader
 └── styles/tokens.css          # Design tokens
 ```
@@ -80,19 +82,13 @@ src/
 - **Scene & Voice Switching** — Bottom control bar for instant scene/voice changes
 - **Motion Tag Insertion** — "+" button inserts a motion into the script for timed playback
 - **Auto-launch** — Presenter initializes automatically when avatar/scene/voice is selected
-- **Session Management** — Token stored in sessionStorage; cleared when the tab closes
+- **Key-Based Auth** — No login step; a build-time Connect publishable key authenticates every request
 
 ## User Flow
 
 ```mermaid
 flowchart TD
-    A[Open App] --> B{Signed in?}
-    B -- No --> C[Login Screen<br/>Enter Email + Password]
-    C --> D[Obtain Bearer Token]
-    D --> E[Enter Main UI]
-    B -- Yes --> E
-
-    E --> F[Auto-load Catalog<br/>Avatars / Scenes / Voices]
+    A[Open App] --> F[Auto-load Catalog<br/>Avatars / Scenes / Voices]
     F --> G[Select Avatar]
     G --> H[Load Motion Library for Avatar]
     G --> I[Presenter Auto-initializes<br/>3D Avatar Renders]
@@ -114,19 +110,18 @@ flowchart TD
 
 ### Step-by-Step
 
-1. **Sign in** — Enter your Perxona account credentials to obtain a Connect API token
-2. **Select Avatar** — Pick a character from the horizontal list; presenter auto-initializes
-3. **Select Voice / Scene** — Use the bottom control bar to switch voice style and background
-4. **Write Script** — Type what you want the avatar to say in the Script Composer
-5. **Insert Motion** — Find a motion in the library, press "+" to add it to the script (or click to preview)
-6. **Play** — Press the Play button; the avatar speaks and performs motions in sequence
-7. **Sign out** — Top-right account dropdown → Sign out
+1. **Select Avatar** — Pick a character from the horizontal list; presenter auto-initializes
+2. **Select Voice / Scene** — Use the bottom control bar to switch voice style and background
+3. **Write Script** — Type what you want the avatar to say in the Script Composer
+4. **Insert Motion** — Find a motion in the library, press "+" to add it to the script (or click to preview)
+5. **Play** — Press the Play button; the avatar speaks and performs motions in sequence
 
 ## Key Flows
 
-**Auth:** Email/password → `POST /api/v1/connect/auth/login` → bearer token stored in `sessionStorage` (never the password).
+**Auth:** Build-time `VITE_PERXONA_CONNECT_PUBLISHABLE_KEY` → sent as `X-Connect-Key` on every REST call and
+handed to the presenter directly — no login, no token exchange.
 
-**Presenter:** Fetch Connect token → `presenter.initialize(token, {avatarId, sceneId, voiceId})` →
+**Presenter:** `presenter.initializeWithConnectKey(key, {avatarId, sceneId, voiceId})` →
 `presenter.present(text)` for speech + lip-sync.
 
 **Motions:** Click a motion block to preview it (`playMotion`). Use the "+" button to insert it into the Script Composer.

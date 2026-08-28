@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { getMotions } from "@/lib/api";
+import { getMotions, type ApiError } from "@/lib/api";
 import type { MotionItem } from "@/components/custom/motion-library";
 
 function extractCategory(tags: string[]): string {
@@ -32,6 +32,6 @@ export function useMotions(avatarId: string) {
   return {
     motions: query.data ?? [],
     isLoading: query.isLoading,
-    error: query.error as Error | null,
+    error: query.error as ApiError | null,
   };
 }

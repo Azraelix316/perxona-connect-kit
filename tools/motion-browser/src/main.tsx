@@ -17,7 +17,15 @@ try {
 } catch (error) {
   const message =
     error instanceof Error ? error.message : "Invalid app configuration";
-  rootElement.textContent = `${message}. Copy .env.example to .env and restart the dev server.`;
+  rootElement.style.whiteSpace = "pre-line";
+  rootElement.textContent = [
+    message,
+    "",
+    "1. Copy .env.example to .env (skip if you already have one)",
+    "2. Fill in the value above in .env",
+    "",
+    "Then reload. If Vite doesn't pick up the change, restart the dev server.",
+  ].join("\n");
   throw error;
 }
 

@@ -7,11 +7,25 @@ import {
   type PresentationTarget,
 } from "@/lib/presenter";
 
+/** The `<sv-presenter>` element's steady-state width; shared by its initial mount and the resize nudge below. */
+const PRESENTER_ELEMENT_WIDTH = "100%";
+
 export interface UsePresenterOptions {
   /** The ref to the container element for the presenter stage. */
   stageRef: React.RefObject<HTMLDivElement | null>;
-  /** Called when the presenter's Connect token has expired. */
-  onConnectTokenExpired?: () => void;
+}
+
+/**
+ * `<sv-presenter>`'s own connectedCallback() unconditionally sets
+ * `this.style.display = 'block'` as an inline style and never reads
+ * `hidden`/`hasAttribute('hidden')` back — an inline style always wins over
+ * the UA stylesheet's `[hidden] { display: none }`, regardless of selector
+ * specificity, so plain `el.hidden = true` is a no-op on this element. Set
+ * `display` directly instead; this only overwrites the `display` property,
+ * leaving the width/height/position it also sets inline untouched.
+ */
+function hidePresenter(el: Presenter, hide: boolean): void {
+  el.style.display = hide ? "none" : "block";
 }
 
 export interface UsePresenter {
@@ -22,14 +36,15 @@ export interface UsePresenter {
   loadError: Error | null;
   /** Re-runs the mount sequence after a `loadError`. */
   retry: () => void;
+  /** True once the Connect key has been refused (401/403) — retrying it is futile. */
+  keyRejected: boolean;
   resumeAudio: () => Promise<void>;
-  initialize: (
-    connectToken: string,
+  initializeWithConnectKey: (
+    connectKey: string,
     target: PresentationTarget,
   ) => Promise<void>;
   present: (content: string) => Promise<PresentationResult | undefined>;
   interruptPresentation: () => void;
-  refreshConnectToken: (token: string) => void;
   playMotion: (motionId: string) => Promise<PresentationResult | undefined>;
 }
 
@@ -45,11 +60,9 @@ export function usePresenter(options: UsePresenterOptions): UsePresenter {
   const [mounted, setMounted] = useState(false);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<Error | null>(null);
+  const [keyRejected, setKeyRejected] = useState(false);
   // Bumping this re-runs the mount effect so a failed load can be retried.
   const [retryCount, setRetryCount] = useState(0);
-
-  // Keep the latest token-expiry handler without re-running the mount effect.
-  const onExpiredRef = useRef(options.onConnectTokenExpired);
 
   useEffect(() => {
     let disposed = false;
@@ -58,18 +71,18 @@ export function usePresenter(options: UsePresenterOptions): UsePresenter {
     async function mount() {
       try {
         setLoadError(null);
+        setKeyRejected(false);
         await loadPresenterEngine();
         if (disposed || !stage) return;
 
         const el = document.createElement("sv-presenter") as Presenter;
-        el.hidden = true;
-        el.style.width = "100%";
+        el.style.width = PRESENTER_ELEMENT_WIDTH;
         el.style.height = "100%";
         el.addEventListener("PRESENTER_STATUS", (event) => {
           const { status: next } = (event as CustomEvent<{ status: string }>)
             .detail;
           if (next === "Ready") {
-            el.hidden = false;
+            hidePresenter(el, false);
             setReady(true);
 
             // Set a default FOV to avoid the default 90° vertical FOV, which is too narrow for most scenes.
@@ -84,23 +97,42 @@ export function usePresenter(options: UsePresenterOptions): UsePresenter {
             // canvas scaling picks up. On a re-initialization (e.g. switching avatars)
             // the element is already visible and stays the same size, so that internal
             // resize logic never re-fires and the canvas keeps a stale scale. Nudge the
-            // element's width by a pixel and back on the next frame to force a genuine,
-            // ResizeObserver-detectable size change and trigger it again.
-            const width = el.style.width;
-            el.style.width = "calc(100% - 1px)";
+            // element's width by a pixel and back to force a genuine, ResizeObserver-
+            // detectable size change and trigger it again.
+            //
+            // Both the nudge and the restore run inside their own rAF (nested, so the
+            // restore is scheduled from within the nudge's frame) rather than one
+            // synchronously plus a single rAF: this makes the two mutations land in two
+            // distinct rendering steps regardless of which task queue PRESENTER_STATUS
+            // happens to be dispatched from, so the browser is guaranteed to broadcast a
+            // ResizeObserver notification between them. Restoring to the fixed
+            // PRESENTER_ELEMENT_WIDTH constant (rather than an el.style.width read back
+            // before the nudge) also means an overlapping Ready from a second
+            // re-initialization can never leave the element permanently stuck at the
+            // nudged width.
             requestAnimationFrame(() => {
-              el.style.width = width;
+              el.style.width = "calc(100% - 1px)";
+              requestAnimationFrame(() => {
+                el.style.width = PRESENTER_ELEMENT_WIDTH;
+              });
             });
           } else {
             // A re-initialization (e.g. avatar/scene/voice switch) has started;
             // the previous presenter state is no longer valid until Ready fires again.
+            // Re-hide the element (mirrors the initial mount) so the old scene's
+            // lighting doesn't render alone during the gap before the new one loads.
+            hidePresenter(el, true);
             setReady(false);
           }
         });
-        el.addEventListener("CONNECT_TOKEN_EXPIRED", () => {
-          onExpiredRef.current?.();
+        el.addEventListener("CONNECT_KEY_REJECTED", () => {
+          setKeyRejected(true);
         });
+        // hidePresenter() must run after append(), not before: connectedCallback
+        // (fired on connection) sets this.style.display = 'block' itself,
+        // unconditionally, which would clobber a display:none set any earlier.
         stage.append(el);
+        hidePresenter(el, true);
         presenterRef.current = el;
         setMounted(true);
       } catch (err) {
@@ -128,9 +160,15 @@ export function usePresenter(options: UsePresenterOptions): UsePresenter {
     await presenterRef.current?.resumeAudioPlayback();
   }, []);
 
-  const initialize = useCallback(
-    async (connectToken: string, target: PresentationTarget) => {
-      await presenterRef.current?.initialize(connectToken, target);
+  const initializeWithConnectKey = useCallback(
+    async (connectKey: string, target: PresentationTarget) => {
+      // Hide immediately, synced with isLaunching rather than waiting for the
+      // widget's own "Initializing" status — resolveTarget()'s network round
+      // trip runs before that status fires, and el would otherwise still show
+      // whatever was rendered before this call (the old scene on a switch)
+      // for that whole window.
+      if (presenterRef.current) hidePresenter(presenterRef.current, true);
+      await presenterRef.current?.initializeWithConnectKey(connectKey, target);
     },
     [],
   );
@@ -147,20 +185,16 @@ export function usePresenter(options: UsePresenterOptions): UsePresenter {
     presenterRef.current?.interruptPresentation();
   }, []);
 
-  const refreshConnectToken = useCallback((token: string) => {
-    presenterRef.current?.refreshConnectToken(token);
-  }, []);
-
   return {
     mounted,
     ready,
     loadError,
     retry,
+    keyRejected,
     resumeAudio,
-    initialize,
+    initializeWithConnectKey,
     present,
     playMotion,
     interruptPresentation,
-    refreshConnectToken,
   };
 }

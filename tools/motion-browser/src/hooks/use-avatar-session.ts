@@ -2,8 +2,7 @@ import type React from "react";
 import { useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 
-import { getConnectToken } from "@/lib/api";
-import { logout } from "@/lib/auth";
+import { getConnectPublishableKey } from "@/lib/env";
 import { usePresenter } from "./use-presenter";
 
 export interface LaunchParams {
@@ -15,29 +14,23 @@ export interface LaunchParams {
 /**
  * Bridges the Connect API with the imperative presenter.
  *
- *  - `launch` fetches a Connect token then initializes the presenter with the
- *    chosen avatar/scene/voice (React Query mutation drives `isLaunching`).
+ *  - `launch` initializes the presenter with the build-time publishable key
+ *    and the chosen avatar/scene/voice (React Query mutation drives
+ *    `isLaunching`) — the key is used as-is, no exchange step.
  *  - `speak` calls `presenter.present(text)` directly — the presenter builds
  *    the performance internally via the Connect API.
- *  - This tool doesn't implement real token refresh: on
- *    `CONNECT_TOKEN_EXPIRED` the session is simply cleared via `logout()`,
- *    which routes the user back to the login screen.
+ *  - A key has no rotation, so there's nothing to refresh: on
+ *    `CONNECT_KEY_REJECTED` the presenter's own `keyRejected` state flips,
+ *    which the UI renders as an error screen — see `use-presenter.ts`.
  */
 export function useAvatarSession(
   stageRef: React.RefObject<HTMLDivElement | null>,
 ) {
-  const presenter = usePresenter({
-    stageRef,
-    onConnectTokenExpired: () => {
-      logout();
-    },
-  });
+  const presenter = usePresenter({ stageRef });
 
   const launchMutation = useMutation({
     mutationFn: async ({ avatarId, sceneId, voiceId }: LaunchParams) => {
-      const { connect_token } = await getConnectToken();
-
-      await presenter.initialize(connect_token, {
+      await presenter.initializeWithConnectKey(getConnectPublishableKey(), {
         avatarId,
         sceneId,
         voiceId,
@@ -84,6 +77,7 @@ export function useAvatarSession(
     ready: presenter.ready,
     loadError: presenter.loadError,
     retryLoad: presenter.retry,
+    keyRejected: presenter.keyRejected,
     launch,
     isLaunching: launchMutation.isPending,
     launchError: launchMutation.error as Error | null,
