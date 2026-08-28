@@ -520,6 +520,26 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 
 app.use(express.static("public", { etag: !IS_DEV }));
 
+// The knowledge upload route needs a larger JSON body than the 100 KB default,
+// and body-parser is a no-op once a body has already been parsed, so its parser
+// must run before the global one. Mounting it by path lets Express match it the
+// same way it matches the route itself (trailing slash, case-insensitive).
+// base64 adds ~33% overhead, so a 1 MB file needs ~1.4 MB of JSON. The 5 MB
+// limit is deliberately looser: it bounds what this process will buffer, while
+// KNOWLEDGE_MAX_FILE_BYTES is the limit users are held to.
+app.use(
+  "/api/chatbots/:id/knowledge",
+  express.json({ limit: "5mb" }),
+  // body-parser answers an oversized body with an HTML stack trace; restate it
+  // as the same JSON error the decoded-size check in the route returns.
+  (err, _req, res, next) => {
+    if (err?.type === "entity.too.large") {
+      res.status(413).json({ error: KNOWLEDGE_TOO_LARGE_MESSAGE });
+      return;
+    }
+    next(err);
+  },
+);
 app.use(express.json());
 
 /**
@@ -885,18 +905,18 @@ const KNOWLEDGE_ALLOWED_MIME_TYPES = new Set([
   "application/octet-stream", // fallback when browser cannot detect MIME
 ]);
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+// Largest knowledge file accepted, measured after base64 decoding.
+const KNOWLEDGE_MAX_FILE_BYTES = 1 * 1024 * 1024;
+const KNOWLEDGE_TOO_LARGE_MESSAGE = `File is too large. Maximum size is ${KNOWLEDGE_MAX_FILE_BYTES / (1024 * 1024)} MB.`;
 
 // POST /api/chatbots/:id/knowledge
 // Body: { filename, content_base64, mime_type }
 // Reads the base64-encoded file from the JSON body, converts it to a Buffer,
 // and PATCHes the upstream chatbot with knowledge_file as multipart/form-data.
 // Separating knowledge upload avoids needing a multipart parser on this server.
-// express.json() defaults to 100 KB; base64 adds ~33% overhead, so a 5 MB file
-// would balloon to ~6.7 MB in transit. The per-route limit below allows files up
-// to ~7.5 MB (10 MB after base64 expansion) without raising the global limit.
+// The JSON body is parsed by the 5 MB parser mounted on this path above.
 app.post(
   "/api/chatbots/:id/knowledge",
-  express.json({ limit: "10mb" }),
   route(async (req, res) => {
     if (USE_MOCK) {
       res
@@ -944,6 +964,10 @@ app.post(
     }
 
     const buffer = Buffer.from(content_base64, "base64");
+    if (buffer.length > KNOWLEDGE_MAX_FILE_BYTES) {
+      res.status(413).json({ error: KNOWLEDGE_TOO_LARGE_MESSAGE });
+      return;
+    }
     res.json(
       await api.uploadChatbotKnowledge(
         id,

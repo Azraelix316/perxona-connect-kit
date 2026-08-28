@@ -1038,6 +1038,9 @@ function setBotStatus(text) {
 
 // ── Knowledge file helpers ────────────────────────────────────────────────
 
+/** Mirrors KNOWLEDGE_MAX_FILE_BYTES in server.mjs, which is the real check. */
+const KNOWLEDGE_MAX_FILE_BYTES = 1 * 1024 * 1024;
+
 /** Knowledge status badge copy & CSS class map. */
 const KNOWLEDGE_STATUS_MAP = {
   processing: { label: "Processing…", badgeClass: "processing" },
@@ -1080,9 +1083,18 @@ function fileToBase64(file) {
   });
 }
 
-// Show selected file name next to the file picker
+// Show selected file name next to the file picker, rejecting oversized files
+// here so the user is not made to wait for a base64 upload the server refuses.
 botKnowledgeFileInput.addEventListener("change", () => {
   const file = botKnowledgeFileInput.files[0];
+  if (file && file.size > KNOWLEDGE_MAX_FILE_BYTES) {
+    botKnowledgeFileInput.value = "";
+    botKnowledgeFilename.textContent = "";
+    setBotStatus(
+      `"${file.name}" is too large. Maximum size is ${KNOWLEDGE_MAX_FILE_BYTES / (1024 * 1024)} MB.`,
+    );
+    return;
+  }
   botKnowledgeFilename.textContent = file ? file.name : "";
 });
 

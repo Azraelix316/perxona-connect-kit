@@ -233,7 +233,7 @@ Under the hood:
 
 1. The browser reads the file and base64-encodes it.
 2. A `POST /api/chatbots/:id/knowledge` call sends `{ filename, content_base64, mime_type }` to the
-   Express server (up to ~7.5 MB).
+   Express server (up to 1 MB).
 3. The server converts the payload back to a `Buffer`, wraps it in `FormData`, and `PATCH`es the
    upstream chatbot with `knowledge_file`.
 4. The status badge updates to `Processing…` and then `Ready` once the upstream finishes indexing.
