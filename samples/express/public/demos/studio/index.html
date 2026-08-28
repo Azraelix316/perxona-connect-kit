@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Perxona Connect Kit — Chatbot</title>
+    <title>Perxona Connect Kit — Studio</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -12,7 +12,7 @@
       <aside class="sidebar">
         <div class="sidebar-inner">
           <p class="brand">Perxona Connect Kit</p>
-          <p class="demo-label">Chatbot Demo</p>
+          <p class="demo-label">Studio Demo</p>
 
           <!-- ── Presenter setup ──────────────────────────────────────── -->
           <section class="sidebar-section">
@@ -45,6 +45,48 @@
             </div>
             <button id="init-btn" disabled>Launch Presenter</button>
             <p id="status-msg" class="status"></p>
+          </section>
+
+          <!-- ── Model source ─────────────────────────────────────────── -->
+          <!-- The second axis, and the reason it lives inside one demo rather
+               than splitting the two: everything downstream of this switch —
+               the lock lifecycle, the history window, the presenter calls — is
+               identical either way, so two demos built on it would have looked
+               the same. The demos split on target shape instead; this is the
+               control that lets you watch the same conversation change hands. -->
+          <section class="sidebar-section" id="source-picker">
+            <p class="section-label">Model source</p>
+            <p class="section-note">
+              Who answers. Switch any time — the conversation carries over, so
+              you can ask the same question of both.
+            </p>
+            <label class="source-option">
+              <input type="radio" name="source" value="connect" checked />
+              <span>
+                <strong>Connect Chatbot</strong>
+                <small>
+                  Perxona runs the model. You get the chatbot below: custom
+                  instructions, knowledge files and function tools, all stored
+                  server-side.
+                </small>
+              </span>
+            </label>
+            <label class="source-option">
+              <input type="radio" name="source" value="own" id="source-own" />
+              <span>
+                <strong>Your own LLM</strong>
+                <small>
+                  You run the model, with your <code>LLM_API_KEY</code>. No
+                  chatbot to manage — and no knowledge files or tools either,
+                  since those live with the chatbot.
+                </small>
+              </span>
+            </label>
+            <p id="source-own-hint" class="field-hint" hidden>
+              <code>LLM_API_KEY</code> is not set, so
+              <code>/api/chat</code> returns <code>501</code>. Set it in
+              <code>.env</code> and restart to enable this option.
+            </p>
           </section>
 
           <!-- ── Chatbot Manager ──────────────────────────────────────── -->
@@ -246,6 +288,11 @@
             </p>
           </div>
           <div id="chat-content" class="chat-content" hidden>
+            <!-- Always visible while chatting: without it the two sources are
+                 indistinguishable once the sidebar scrolls out of view. -->
+            <p class="active-source">
+              Answering with <strong id="active-source-label"></strong>
+            </p>
             <div id="chat-log" class="chat-log"></div>
             <form id="chat-form" class="chat-input-row">
               <input
@@ -255,6 +302,14 @@
                 autocomplete="off"
               />
               <button type="submit" id="chat-send-btn" disabled>Send</button>
+              <button
+                type="button"
+                id="chat-stop-btn"
+                class="btn-ghost"
+                disabled
+              >
+                Stop
+              </button>
             </form>
           </div>
         </div>

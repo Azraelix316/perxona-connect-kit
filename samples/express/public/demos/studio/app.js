@@ -1,14 +1,19 @@
 /**
- * Perxona Connect Kit — Chatbot Demo
+ * Perxona Connect Kit — Studio Demo
  *
- * Shows the full chatbot lifecycle integrated with sv-presenter:
- *   1. Chatbot CRUD — create, read, update, delete via /api/chatbots proxy
- *   2. Multi-turn conversation using the Connect chatbot chat API
- *   3. Each assistant reply is piped into sv-presenter for live speech playback
+ * The full client, for when you are building the application itself:
+ *   1. Catalog pickers — browse avatars, scenes and voices
+ *   2. Chatbot CRUD — create, read, update, delete via /api/chatbots proxy
+ *   3. Multi-turn conversation, with interrupt and a send lock
+ *   4. Each assistant reply is piped into sv-presenter for live speech playback
  *
- * The Connect chatbot messages format differs from OpenAI's: each message has a
- * `parts` array instead of a plain `content` string:
+ * A source switch chooses who runs the model — a Connect-hosted chatbot or your
+ * own LLM_API_KEY — and can be flipped mid-conversation. That is why the history
+ * is held provider-neutral as { role, text } and serialized only at the call
+ * site: the Connect chat API takes a `parts` array,
  *   { role: "user"|"assistant", parts: [{ type: "text", text: "…" }] }
+ * while /api/chat takes OpenAI's `content` string. See toConnectMessages /
+ * toOpenAiMessages.
  *
  * Zero dependencies — plain ESM, no build step required.
  */
@@ -39,11 +44,15 @@ async function loadPresenterEngine(presenterUrl) {
 const appConfig = await request("/api/config");
 const isPresenterLaunchDisabled = appConfig.mock;
 
-// Block module execution until the presenter custom element is defined, so
-// <sv-presenter> is upgraded before any code below can call its methods.
-if (!isPresenterLaunchDisabled) {
-  await loadPresenterEngine(appConfig.presenterUrl);
-}
+// Loaded in the bootstrap at the end, not here: a rejection in top-level await
+// would abort module evaluation and leave every handler below unregistered.
+// Launch waits on this flag; everything else works without the engine.
+let presenterEngineReady = false;
+
+// True for the span between the Launch click and the request settling
+// (success or error), so a picker change mid-flight can't re-enable Launch
+// and fire a second overlapping initializeWithConnectKey().
+let isLaunching = false;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -93,6 +102,73 @@ const chatLog = document.getElementById("chat-log");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatSendBtn = document.getElementById("chat-send-btn");
+const chatStopBtn = document.getElementById("chat-stop-btn");
+
+// Source switch
+const sourceRadios = document.querySelectorAll('input[name="source"]');
+const sourceOwnRadio = document.getElementById("source-own");
+const sourceOwnHint = document.getElementById("source-own-hint");
+const sourceLabel = document.getElementById("active-source-label");
+const chatbotManager = document.getElementById("chatbot-manager");
+
+// The one place this demo hand-writes motion markup, and the only kind of place
+// that earns it: a specific action at a specific moment. Everything the chatbot
+// replies with is sent as plain text, because the Connect API picks motions on
+// its own — that is the normal case, not a fallback.
+//
+// Two things to know before copying this pattern:
+//   1. A message containing ANY motion mark skips automatic motion selection for
+//      the whole utterance. Markup is all-or-nothing per message, not a hint
+//      layered on top of the automatic choice.
+//   2. A motion id your Connect account cannot see is dropped, not rejected — the
+//      line still speaks, it just carries no gesture. Combined with (1) that
+//      means this greeting is silent-handed on any account but the one the id
+//      came from. Replace it with an id from your own catalog; `tools/motion-browser`
+//      composes these strings for you.
+// The two ways the chat can be busy: a request is in flight, or a performance is
+// open. Both are read by syncChatControls() and written nowhere but the two
+// setters beside it — a third writer that knows only one of them is what this
+// pair exists to prevent.
+let isSpeaking = false;
+let isAwaitingReply = false;
+
+const GREETING =
+  "Hi there! [MOTION 01KRW97VSEA5G49W2YXWGV8JRV:1] Ask me anything.";
+
+// Prefilled so a new organization can reach a working avatar by pressing Save.
+// Every reply is read aloud by present(), so the instructions ask for short
+// sentences and no markdown — the two things that sound wrong through an avatar.
+const NEW_BOT_DEFAULTS = {
+  name: "Demo Assistant",
+  instructions:
+    "You are a friendly assistant speaking out loud through an avatar. " +
+    "Keep replies to one or two short sentences, and never use markdown — " +
+    "everything you say is read aloud.",
+};
+
+// Sent only on the own-LLM path. The Connect chatbot gets its persona from its
+// own `custom_instructions` field instead, which is why there is no equivalent
+// for that source — the difference in *where the persona lives* is part of what
+// the switch is demonstrating.
+const OWN_LLM_SYSTEM_PROMPT =
+  "You are a helpful avatar assistant speaking out loud. Keep replies to one " +
+  "or two short sentences. Never use markdown formatting.";
+
+const CREDIT_EXHAUSTED_CODE = 1003;
+const NO_SUBSCRIPTION_CODE = 14005;
+// 1003 fires for two distinct backend conditions — credits run out, or the
+// subscription's own status is no longer usable — and 400 either way. 14005
+// is a third, separate condition with the same remedy (Console) but its own
+// HTTP status (403): no subscription record exists for the org at all. All
+// three share this one fixed, non-technical reply rather than naming one.
+const isSubscriptionIssue = (code) =>
+  code === CREDIT_EXHAUSTED_CODE || code === NO_SUBSCRIPTION_CODE;
+// A plain string, not a function like embed's subscriptionIssueReply:
+// appConfig is already resolved by top-level await above, so there is
+// nothing to defer.
+const subscriptionIssueReply =
+  "Your organization's credits are used up or its subscription needs " +
+  `attention. Check your usage at ${appConfig.subscriptionUrl}`;
 
 // Debug timeline panel
 const debugPanel = document.getElementById("debug-panel");
@@ -104,8 +180,24 @@ const presenter = document.querySelector("sv-presenter");
 
 // ── App state ──────────────────────────────────────────────────────────────
 
-/** Conversation history for the active chatbot session (Connect message format). */
+/**
+ * Conversation history in this app's own shape — `{ role, text }`, belonging to
+ * neither API. Each source serializes it at the boundary (see
+ * toConnectMessages / toOpenAiMessages), which is the whole difference between
+ * them: same conversation, two wire formats.
+ * @type {{ role: "user"|"assistant", text: string }[]}
+ */
 let chatHistory = [];
+
+/**
+ * Which model answers. `"connect"` posts to the selected Connect chatbot;
+ * `"own"` posts to /api/chat, which forwards to whatever LLM_API_KEY points at.
+ * @type {"connect" | "own"}
+ */
+let source = "connect";
+
+/** Whether LLM_API_KEY is configured — /api/chat 501s without it. */
+const ownLlmAvailable = Boolean(appConfig.chat);
 /** ID of the currently selected chatbot, or null. */
 let activeBotId = null;
 /** Lightweight chatbot list from the last /api/chatbots call. */
@@ -133,8 +225,12 @@ async function request(path, { method = "GET", body } = {}) {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
+    // detail: FastAPI validation errors. details: the real Connect API's
+    // Error schema, passed through unchanged by server.mjs's route(). error:
+    // this server's own hand-rolled validation.
     const message =
       (Array.isArray(data.detail) ? data.detail[0]?.msg : data.detail) ??
+      data.details ??
       data.error ??
       res.statusText;
     throw Object.assign(new Error(message), { status: res.status, data });
@@ -145,6 +241,10 @@ async function request(path, { method = "GET", body } = {}) {
 
 // ── Catalog ────────────────────────────────────────────────────────────────
 
+/**
+ * Fill a picker and preselect the first item, so Launch is one click away.
+ * `emptyLabel` stays selectable — clearing the voice selects BYO-TTS.
+ */
 function fillSelect(select, items, emptyLabel) {
   select.replaceChildren(
     Object.assign(document.createElement("option"), {
@@ -158,6 +258,7 @@ function fillSelect(select, items, emptyLabel) {
       return opt;
     }),
   );
+  select.value = items[0]?.id ?? "";
 }
 
 function updateAssetIcon(img, items, id, thumbnailKey) {
@@ -178,7 +279,11 @@ function updateAssetIcon(img, items, id, thumbnailKey) {
 
 function updateInitBtn() {
   initBtn.disabled =
-    isPresenterLaunchDisabled || !avatarSelect.value || !sceneSelect.value;
+    isPresenterLaunchDisabled ||
+    !presenterEngineReady ||
+    !avatarSelect.value ||
+    !sceneSelect.value ||
+    isLaunching;
 }
 
 avatarSelect.addEventListener("change", () => {
@@ -189,6 +294,9 @@ sceneSelect.addEventListener("change", () => {
   updateInitBtn();
   updateAssetIcon(sceneIcon, scenes, sceneSelect.value, "default");
 });
+// voiceId is only read at initializeWithConnectKey() time, so switching
+// voice must re-enable Launch the same way avatar/scene changes do.
+voiceSelect.addEventListener("change", updateInitBtn);
 
 async function loadCatalog() {
   setStatus("Loading catalog…");
@@ -215,9 +323,11 @@ async function loadCatalog() {
       setStatus("");
     }
   } catch (err) {
+    // Catalog reads need only asset:read and voice:read, which every key type
+    // carries — so a wrong key *type* is never why these three failed.
     const credentialHint =
       err.status === 401 || err.status === 403
-        ? " — check PERXONA_CONNECT_EMAIL/PASSWORD in .env"
+        ? " — the server's Connect key was refused: revoked, expired, or restricted to allowed domains (a server sends no Origin, so any domain restriction refuses it)"
         : "";
     setStatus(`Catalog error: ${err.message}${credentialHint}`);
   }
@@ -236,33 +346,29 @@ presenter.addEventListener("PRESENTER_STATUS", (e) => {
   setStatus(STATUS_LABELS[status] ?? status);
   if (status === "Ready") {
     presenterReady = true;
+    isLaunching = false;
     stagePlaceholder.hidden = true;
     presenter.hidden = false;
     debugPanel.hidden = false; // reveal the timeline once the avatar is live
     updateChatUI();
+    // Same rule the submit handler applies: a line that never queued has no
+    // ALL_PERFORMANCE_FINISHED coming, so nothing else will release the controls.
+    // Without this a failed greeting leaves the reader pressing Stop to type.
+    speak(GREETING).then((queued) => {
+      if (!queued) setSpeaking(false);
+    });
   }
 });
 
-// The presenter fires CONNECT_TOKEN_EXPIRED whenever a Connect API call inside
-// the SDK returns 401 — including during initialize() and during playback. The
-// call that triggered the event still fails; refreshConnectToken() only swaps
-// in a fresh token for *subsequent* calls, so a failed initialize()/present()
-// needs the user (or the calling code) to retry it.
-// isRefreshingToken guards against overlapping refreshes if the event fires
-// again (e.g. from a second in-flight call) before the first one settles.
-let isRefreshingToken = false;
-presenter.addEventListener("CONNECT_TOKEN_EXPIRED", async () => {
-  if (isRefreshingToken) return;
-  isRefreshingToken = true;
-  try {
-    const freshToken = await fetchConnectToken();
-    presenter.refreshConnectToken(freshToken);
-    setStatus("Connect token refreshed — try again.");
-  } catch (err) {
-    setStatus(`Token refresh failed: ${err.message}`);
-  } finally {
-    isRefreshingToken = false;
-  }
+// A refused key has no refresh to fall back on — it is revoked, expired, or
+// was never granted the scope, and presenting it again fails identically. The
+// call that triggered this already failed; the reader has to fix the key and
+// launch again.
+presenter.addEventListener("CONNECT_KEY_REJECTED", () => {
+  setStatus(
+    "Connect key rejected — revoked, expired, or missing a scope. Check PERXONA_CONNECT_PUBLISHABLE_KEY.",
+  );
+  updateInitBtn();
 });
 
 // ── Presenter lifecycle events (debug timeline) ──────────────────────────
@@ -285,6 +391,7 @@ presenter.addEventListener("PERFORMANCE_END", () => {
 
 presenter.addEventListener("ALL_PERFORMANCE_FINISHED", () => {
   appendDebug("ok", "All performances finished — avatar returned to idle ✓");
+  setSpeaking(false);
 });
 
 presenter.addEventListener("PLAYING_SPEECH_TEXT", (e) => {
@@ -295,9 +402,9 @@ presenter.addEventListener("PLAYING_SPEECH_TEXT", (e) => {
 
 // ── Initialize presenter ───────────────────────────────────────────────────
 
-async function fetchConnectToken() {
-  const { connect_token } = await request("/api/connect-token");
-  return connect_token;
+async function fetchConnectKey() {
+  const { connect_key } = await request("/api/connect-key");
+  return connect_key;
 }
 
 initBtn.addEventListener("click", async () => {
@@ -305,15 +412,16 @@ initBtn.addEventListener("click", async () => {
     setStatus("Configure live credentials to launch the presenter.");
     return;
   }
+  isLaunching = true;
   initBtn.disabled = true;
-  setStatus("Fetching connect token…");
+  setStatus("Fetching connect key…");
   try {
     // resumeAudioPlayback must be called from a direct user gesture to satisfy
     // browser autoplay policy before the presenter attempts audio playback.
     await presenter.resumeAudioPlayback?.();
-    const connectToken = await fetchConnectToken();
+    const connectKey = await fetchConnectKey();
     setStatus("Initializing…");
-    await presenter.initialize(connectToken, {
+    await presenter.initializeWithConnectKey(connectKey, {
       avatarId: avatarSelect.value,
       sceneId: sceneSelect.value,
       voiceId: voiceSelect.value || undefined,
@@ -321,7 +429,8 @@ initBtn.addEventListener("click", async () => {
     // Status label is then driven by PRESENTER_STATUS events above.
   } catch (err) {
     setStatus(`Error: ${err.message}`);
-    initBtn.disabled = false;
+    isLaunching = false;
+    updateInitBtn();
   }
 });
 
@@ -331,12 +440,19 @@ initBtn.addEventListener("click", async () => {
  * Send text to the presenter for speech synthesis and playback. Silently
  * skips if the presenter is not yet ready (chat still works as text-only).
  * @param {string} text
+ * @returns {Promise<boolean>} whether a performance was queued — the caller
+ * needs this to know whether to expect ALL_PERFORMANCE_FINISHED at all.
  */
 async function speak(text) {
-  if (!presenterReady || !text.trim()) return;
+  if (!presenterReady || !text.trim()) return false;
   appendDebug("cmd", "presenter.setThinking(false)");
   presenter.setThinking?.(false);
   appendDebug("cmd", "presenter.present() — queuing speech + motion");
+  // Lock from the moment the request goes in rather than from PERFORMANCE_START.
+  // present() can resolve queued and then never start playing, and a Stop button
+  // that only lights up once speech begins would leave that window with no event
+  // coming and no control to press.
+  setSpeaking(true);
   try {
     const result = await presenter.present(text.trim());
     if (!result?.success) {
@@ -345,12 +461,14 @@ async function speak(text) {
         "err",
         `present() failed: ${result?.code} — ${result?.message ?? ""}`,
       );
-    } else {
-      appendDebug("ok", "present() accepted — performance queued ✓");
+      return false;
     }
+    appendDebug("ok", "present() accepted — performance queued ✓");
+    return true;
   } catch (err) {
     setStatus(`Playback error: ${err.message}`);
     appendDebug("err", `present() threw: ${err.message}`);
+    return false;
   }
 }
 
@@ -386,7 +504,7 @@ function populateBotPicker(bots) {
     return li;
   }
   botPickerList.replaceChildren(
-    makeOption(null, "— select a chatbot —"),
+    makeOption(null, bots.length ? "— select a chatbot —" : "— none yet —"),
     ...bots.map(({ id, name, status }) =>
       makeOption(id, status === "disabled" ? `${name} (disabled)` : name),
     ),
@@ -410,7 +528,9 @@ function selectChatbot(id) {
     ? bot.status === "disabled"
       ? `${bot.name} (disabled)`
       : bot.name
-    : "— select a chatbot —";
+    : chatbotList.length
+      ? "— select a chatbot —"
+      : "— none yet —";
   // Sync aria-selected in the open list
   botPickerList.querySelectorAll(".bot-picker-option").forEach((li) => {
     li.setAttribute(
@@ -467,6 +587,13 @@ async function loadChatbots() {
     } else {
       selectChatbot(null);
     }
+    // A new organization has none; an empty picker on its own is a dead end.
+    if (chatbotList.length === 0) {
+      openNewBotForm(false);
+      setBotStatus(
+        "No chatbots yet — this form is filled in, just press Save.",
+      );
+    }
   } catch (err) {
     setBotStatus(`Failed to load chatbots: ${err.message}`);
   }
@@ -497,10 +624,14 @@ botEditor.addEventListener("toggle", async () => {
   }
 });
 
-botNewBtn.addEventListener("click", () => {
+/**
+ * Open the create form, prefilled and ready to submit.
+ * @param {boolean} focus false when opening unprompted — do not steal focus.
+ */
+function openNewBotForm(focus = true) {
   selectChatbot(null); // deselect any active bot
-  botNameInput.value = "";
-  botInstructionsInput.value = "";
+  botNameInput.value = NEW_BOT_DEFAULTS.name;
+  botInstructionsInput.value = NEW_BOT_DEFAULTS.instructions;
   botToolsInput.value = "";
   botToolsCount.textContent = "";
   botKnowledgeFileInput.value = "";
@@ -508,7 +639,11 @@ botNewBtn.addEventListener("click", () => {
   updateKnowledgeStatus(null);
   botEditorSummary.textContent = "Create New Chatbot";
   botEditor.open = true;
-  botNameInput.focus();
+  if (focus) botNameInput.focus();
+}
+
+botNewBtn.addEventListener("click", () => {
+  openNewBotForm();
   setBotStatus("");
 });
 
@@ -635,21 +770,34 @@ botDeleteBtn.addEventListener("click", async () => {
  * presenter is ready. If only one condition is met, show a contextual hint.
  */
 function updateChatUI() {
-  const hasBot = Boolean(activeBotId);
+  const ready = canSend();
 
-  // Chat is available as soon as a bot is selected — no presenter required.
-  // speak() already silently skips audio when the presenter isn't ready, so
-  // the text conversation works independently of the presenter state.
-  chatContent.hidden = !hasBot;
-  chatSendBtn.disabled = !hasBot;
+  // Chat is available as soon as the active source can answer — no presenter
+  // required. speak() already silently skips audio when the presenter isn't
+  // ready, so the text conversation works independently of presenter state.
+  chatContent.hidden = !ready;
+  sourceLabel.textContent =
+    source === "connect" ? "Connect Chatbot" : "Your own LLM";
+  syncChatControls();
 
-  if (hasBot) {
+  if (ready) {
     chatPlaceholder.hidden = true;
-  } else {
-    chatPlaceholder.hidden = false;
+    return;
+  }
+
+  chatPlaceholder.hidden = false;
+  if (source === "connect") {
+    // "Select" is the wrong verb when there is nothing to select from, which
+    // is every brand-new organization.
+    const verb = chatbotList.length ? "Select" : "Create";
     chatHintText.textContent = presenterReady
-      ? "Select a chatbot to start chatting."
-      : "Select a chatbot to chat. Launch the presenter first to also hear the replies.";
+      ? `${verb} a chatbot to start chatting.`
+      : `${verb} a chatbot to chat. Launch the presenter first to also hear the replies.`;
+  } else {
+    // The only way to land here: the own-LLM source is selected but the server
+    // reported chat: false. Say which variable, not just "unavailable".
+    chatHintText.textContent =
+      "Set LLM_API_KEY in .env and restart the server to use your own model.";
   }
 }
 
@@ -666,90 +814,219 @@ function appendChat(role, text) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+chatStopBtn.addEventListener("click", () => {
+  appendDebug("cmd", "presenter.interruptPresentation()");
+  presenter.interruptPresentation?.();
+  // interruptPresentation() cancels the queue, so ALL_PERFORMANCE_FINISHED is
+  // not coming for the performance we just cut short — leave the speaking state
+  // here rather than waiting for an event that will never arrive.
+  setSpeaking(false);
+});
+
+// ── Wire formats ───────────────────────────────────────────────────────────
+//
+// The only place the two sources actually differ. Everything above and below
+// this pair — the lock lifecycle, the history window, the presenter calls — is
+// identical no matter which one is answering.
+
+/** Connect's parts-based shape: `{ role, parts: [{ type, text }] }`. */
+const toConnectMessages = (turns) =>
+  turns.map(({ role, text }) => ({ role, parts: [{ type: "text", text }] }));
+
+/** OpenAI's shape: `{ role, content }`. Used by /api/chat for both providers. */
+const toOpenAiMessages = (turns) =>
+  turns.map(({ role, text }) => ({ role, content: text }));
+
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = chatInput.value.trim();
-  if (!text || !activeBotId) return;
+  if (!text || !canSend()) return;
 
   chatInput.value = "";
-  chatSendBtn.disabled = true;
-  chatInput.disabled = true;
+  setAwaitingReply(true);
+  let queued = false;
 
   // Add user message to history and display it
   appendChat("user", text);
-  appendDebug(
-    "user",
-    `You sent: “${text.length > 60 ? text.slice(0, 60) + "…" : text}”`,
-  );
-  chatHistory.push({ role: "user", parts: [{ type: "text", text }] });
+  chatHistory.push({ role: "user", text });
 
   // Signal "thinking" on the presenter while the LLM processes the request
   appendDebug("cmd", "presenter.setThinking(true)");
   presenter.setThinking?.(true);
   presenter.setListening?.(false);
 
-  appendDebug("api", "Calling chatbot API…");
+  const route =
+    source === "connect" ? `/api/chatbots/${activeBotId}/chat` : "/api/chat";
+  appendDebug("cmd", `POST ${route}`);
   try {
-    // Send only the last MAX_HISTORY_TURNS turns to the chatbot API.
-    // Gemini (the LLM powering the Connect chatbot) has a fixed backend
-    // deadline. Sending the full unbounded history causes the prompt to
-    // grow until it exceeds that deadline → 504 DEADLINE_EXCEEDED.
-    // Keeping a sliding window avoids the timeout while preserving recent
-    // conversational context. The full history remains in chatHistory for
-    // display in the chat log.
+    // Send only the last MAX_HISTORY_TURNS turns. Gemini (the LLM powering the
+    // Connect chatbot) has a fixed backend deadline, and an unbounded history
+    // grows the prompt until it exceeds it → 504 DEADLINE_EXCEEDED. The same
+    // bound is applied on the own-LLM path: every provider has some ceiling,
+    // and /api/chat enforces one server-side too. The full history stays in
+    // chatHistory for display in the chat log.
     const MAX_HISTORY_TURNS = 20; // 10 user + 10 assistant messages
-    const windowedMessages = chatHistory.slice(-MAX_HISTORY_TURNS);
+    const windowed = chatHistory.slice(-MAX_HISTORY_TURNS);
 
-    // POST /api/chatbots/:id/chat → { id, status, reply_text }
-    const chatResponse = await request(`/api/chatbots/${activeBotId}/chat`, {
-      method: "POST",
-      body: { messages: windowedMessages },
-    });
+    // The one fork. Two routes, two wire formats, two response shapes —
+    // and from `reply` onward the code is shared again.
+    let reply = null;
+    let failureReason = null;
 
-    if (chatResponse.status === "succeeded" && chatResponse.reply_text) {
-      const reply = chatResponse.reply_text;
+    if (source === "connect") {
+      // POST /api/chatbots/:id/chat → { id, status, reply_text }
+      const res = await request(route, {
+        method: "POST",
+        body: { messages: toConnectMessages(windowed) },
+      });
+      if (res.status === "succeeded" && res.reply_text) {
+        reply = res.reply_text;
+      } else {
+        failureReason =
+          res.status === "failed"
+            ? "The chatbot failed to generate a response."
+            : `Unexpected response (status: ${res.status}).`;
+      }
+    } else {
+      // POST /api/chat → OpenAI-compatible { choices: [{ message: { content } }] }
+      const res = await request(route, {
+        method: "POST",
+        body: {
+          messages: [
+            { role: "system", content: OWN_LLM_SYSTEM_PROMPT },
+            ...toOpenAiMessages(windowed),
+          ],
+        },
+      });
+      reply = res.choices?.[0]?.message?.content?.trim() || null;
+      if (!reply) failureReason = "The model returned an empty reply.";
+    }
+
+    if (reply) {
       appendChat("assistant", reply);
       appendDebug(
-        "bot",
-        `Chatbot replied: “${reply.length > 60 ? reply.slice(0, 60) + "…" : reply}”`,
+        "ok",
+        `Reply: “${reply.length > 60 ? reply.slice(0, 60) + "…" : reply}”`,
       );
       // Add assistant turn to history so follow-up messages have full context
-      chatHistory.push({
-        role: "assistant",
-        parts: [{ type: "text", text: reply }],
-      });
+      chatHistory.push({ role: "assistant", text: reply });
       // Hand the reply text to the presenter for speech + motion playback
-      await speak(reply);
+      queued = await speak(reply);
     } else {
       // Roll back the user turn — no usable assistant reply was produced.
-      // Covers: status === "failed", status === "succeeded" with empty
-      // reply_text, or any other unexpected status value. Without this pop,
-      // the orphaned user turn would be re-sent on every subsequent message,
-      // producing consecutive role:"user" entries that break the parts-based
-      // multi-turn format expected by the Connect chatbot API.
+      // Without this pop, the orphaned user turn would be re-sent on every
+      // subsequent message, producing consecutive role:"user" entries that
+      // break the multi-turn format both APIs expect.
       chatHistory.pop();
-      const reason =
-        chatResponse.status === "failed"
-          ? "The chatbot failed to generate a response."
-          : `Unexpected response (status: ${chatResponse.status}).`;
-      appendChat("error", `${reason}`);
-      appendDebug("err", `Chatbot status: ${chatResponse.status}`);
+      appendChat("error", failureReason);
+      appendDebug("err", failureReason);
       presenter.setThinking?.(false);
     }
   } catch (err) {
     // Roll back the user turn so a retry doesn't send a duplicate.
     chatHistory.pop();
-    appendChat("error", `${err.message}`);
-    appendDebug("err", `API error: ${err.message}`);
+    const subscriptionIssue = isSubscriptionIssue(err.data?.code);
+    const errorText = subscriptionIssue
+      ? subscriptionIssueReply
+      : `${err.message}`;
+    appendChat("error", errorText);
+    appendDebug(
+      "err",
+      // Only the subscription-issue reply is deliberately generic in the chat
+      // bubble above — its raw `details` (org_id and all) goes to this panel
+      // instead, which is why this branch reaches into err.data?.details
+      // rather than reusing err.message. Every other failure's `details`
+      // already reached the bubble via err.message (request() prioritizes it
+      // — see the fallback chain there), so this just re-prefixes the same
+      // string; Studio is a local dev tool, so that's fine here.
+      subscriptionIssue
+        ? `Subscription issue (code ${err.data?.code}): ${err.data?.details ?? ""}`
+        : `API error: ${err.message}`,
+    );
     presenter.setThinking?.(false);
   } finally {
-    chatSendBtn.disabled = !activeBotId;
-    chatInput.disabled = false;
-    chatInput.focus();
+    // Once a performance is queued, ALL_PERFORMANCE_FINISHED or Stop owns the
+    // unlock — releasing here too is exactly what let the send button come back
+    // while the avatar was still speaking. Every other path queued nothing, so
+    // no such event is coming and this is the only place left to unlock.
+    setAwaitingReply(false);
+    if (!queued) setSpeaking(false);
   }
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Record that a performance opened or closed, then re-derive the controls.
+ * @param {boolean} speaking
+ */
+function setSpeaking(speaking) {
+  isSpeaking = speaking;
+  syncChatControls();
+  if (!speaking) chatInput.focus();
+}
+
+/**
+ * Record that a chatbot request opened or closed, then re-derive the controls.
+ * @param {boolean} awaiting
+ */
+function setAwaitingReply(awaiting) {
+  isAwaitingReply = awaiting;
+  syncChatControls();
+}
+
+/**
+ * The only place the chat controls' enabled state is computed. Both inputs are
+ * read here — whether a performance is open, and whether a chatbot is selected —
+ * because anything that writes one of these properties while knowing only one of
+ * the two will silently undo the other. That is exactly how selecting a chatbot
+ * mid-speech used to re-enable Send.
+ */
+/**
+ * Whether the active source has everything it needs to answer. The asymmetry
+ * is real and deliberate: Connect needs a chatbot picked first, the own-LLM
+ * path needs only a key the server already confirmed.
+ */
+function canSend() {
+  return source === "connect" ? Boolean(activeBotId) : ownLlmAvailable;
+}
+
+/**
+ * Switch which model answers. Nothing about the conversation is reset — the
+ * history carries across, so the next reply comes from the other provider with
+ * the same context. That continuity is the point: it is the only way to see
+ * the two sources answer the *same* conversation.
+ */
+function setSource(next) {
+  source = next;
+  // The chatbot picker is Connect-only machinery; hiding it keeps the sidebar
+  // honest about what the active source actually uses.
+  chatbotManager.hidden = next !== "connect";
+  updateChatUI();
+}
+
+sourceRadios.forEach((radio) =>
+  radio.addEventListener("change", () => {
+    if (radio.checked) setSource(radio.value);
+  }),
+);
+
+// /api/chat 501s without LLM_API_KEY, and appConfig.chat is how the server
+// says so. Until this demo read that flag it was reported and ignored — the
+// participant found out by sending a message and getting an error back.
+if (!ownLlmAvailable) {
+  sourceOwnRadio.disabled = true;
+  sourceOwnHint.hidden = false;
+}
+
+function syncChatControls() {
+  const busy = isSpeaking || isAwaitingReply;
+  // Stop follows the performance alone: there is nothing to interrupt while a
+  // request is merely in flight.
+  chatStopBtn.disabled = !isSpeaking;
+  chatSendBtn.disabled = busy || !canSend();
+  chatInput.disabled = busy;
+}
 
 function setStatus(text) {
   statusMsg.textContent = text;
@@ -926,8 +1203,26 @@ botIdCopy.addEventListener("click", () => {
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 //
-// Load catalog and chatbot list in parallel. Both are independent server
-// calls; there is no ordering dependency between them.
+// Runs last, once every handler above is attached, and swallows its own
+// failures. The three calls are independent; only the presenter engine's
+// absence is survivable, and Launch is disabled when it is.
 
-await Promise.all([loadCatalog(), loadChatbots()]);
+await Promise.all([
+  loadCatalog(),
+  loadChatbots(),
+  isPresenterLaunchDisabled
+    ? Promise.resolve()
+    : loadPresenterEngine(appConfig.presenterUrl).then(
+        () => {
+          presenterEngineReady = true;
+          updateInitBtn();
+        },
+        (err) => {
+          stagePlaceholder.querySelector("p").textContent =
+            "Presenter engine unavailable — check PRESENTER_URL and the browser console. Chat still works as text.";
+          setStatus(`Presenter engine failed to load: ${err.message}`);
+          console.error(err);
+        },
+      ),
+]);
 updateChatUI();
