@@ -343,7 +343,7 @@ async function sendUserMessage(text, precomputedHighlight = null) {
     } else if ((isAffirmative || /click|where|show|point/i.test(userText)) && highlightTarget) {
       console.log('[User Response: Affirmative] Triggering desktop highlight overlay at:', highlightTarget);
       window.electronAPI?.showHighlight?.(highlightTarget);
-      startTaskTracking(highlightTarget);
+      startTaskTracking(highlightTarget, screenshot);
     }
 
     // 4. Compile message for Perxona Chatbot with full spatial intelligence
@@ -398,11 +398,12 @@ async function sendUserMessage(text, precomputedHighlight = null) {
 let activeTask = null;
 let taskVerificationInterval = null;
 
-function startTaskTracking(target) {
+function startTaskTracking(target, initialScreenshot = null) {
   if (!target) return;
   activeTask = {
     label: target.label || 'Target Element',
     box_2d: target.box_2d,
+    previousScreenshot: initialScreenshot,
     startedAt: Date.now(),
     lastSupportAt: Date.now(),
     supportCount: 0
@@ -417,15 +418,21 @@ function startTaskTracking(target) {
     }
 
     try {
-      const screenshot = await window.electronAPI?.captureScreen?.();
-      if (!screenshot || !activeTask) return;
+      const currentScreenshot = await window.electronAPI?.captureScreen?.();
+      if (!currentScreenshot || !activeTask) return;
 
       const elapsedSeconds = Math.round((Date.now() - activeTask.startedAt) / 1000);
       const res = await apiRequest('/api/verify-task', {
-        screenshot_base64: screenshot,
+        screenshot_base64: currentScreenshot,
+        previous_screenshot_base64: activeTask.previousScreenshot,
         activeTask,
-        elapsedSeconds
+        elapsedSeconds,
+        supportCount: activeTask.supportCount
       }).catch(() => null);
+
+      if (res?.visualDiff) {
+        console.log(`[Visual Difference] ${res.visualDiff}`);
+      }
 
       if (res?.isCompleted && activeTask) {
         console.log(`[Task Verification] Success! User completed action on "${activeTask.label}". Auto-dismissing highlight.`);
@@ -438,22 +445,23 @@ function startTaskTracking(target) {
         }
 
         // Chime in with celebration & next step
-        const confirmPrompt = `[Task Success: User just successfully clicked/opened "${completedTaskLabel}". Next: "${res.nextStep || ''}"] Acknowledge their progress enthusiastically in 1 brief friendly sentence!`;
+        const confirmPrompt = `[Task Success: User just successfully completed action on "${completedTaskLabel}". Next: "${res.nextStep || ''}"] Acknowledge their progress enthusiastically in 1 brief friendly sentence!`;
         history.push({ role: 'user', text: confirmPrompt });
         const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
           messages: toConnectMessages(history.slice(-MAX_HISTORY))
         });
-        const reply = chatRes?.reply_text || `Great job! You opened ${completedTaskLabel}.`;
+        const reply = chatRes?.reply_text || `Great job! You completed that step.`;
         showBubble('NavGuide', reply, 12000);
         history.push({ role: 'assistant', text: reply });
         await speakWithAvatar(reply);
-      } else if (res?.isStuck && res?.supportAdvice && activeTask && (Date.now() - activeTask.lastSupportAt > 16000) && activeTask.supportCount < 2) {
+      } else if (res?.isStuck && res?.supportAdvice && activeTask && (Date.now() - activeTask.lastSupportAt > 14000)) {
         activeTask.lastSupportAt = Date.now();
         activeTask.supportCount++;
-        console.log(`[Task Support] User seems stuck on "${activeTask.label}". Offering supportive hint: ${res.supportAdvice}`);
+        activeTask.previousScreenshot = currentScreenshot; // Update snapshot to latest step
+        console.log(`[Continuous Task Support #${activeTask.supportCount}] Offering coaching on "${activeTask.label}": ${res.supportAdvice}`);
 
-        // Provide proactive assistive support
-        const helpPrompt = `[Supportive Coaching: User is still looking for "${activeTask.label}". Helpful Hint: "${res.supportAdvice}"] Chime in with 1 warm, supportive sentence offering this helpful hint to guide them!`;
+        // Provide proactive assistive support without stopping
+        const helpPrompt = `[Continuous Supportive Coaching #${activeTask.supportCount}: User is still working on "${activeTask.label}". Context Diff: "${res.visualDiff || ''}". Helpful Hint: "${res.supportAdvice}"] Chime in with 1 warm, supportive sentence offering this helpful hint to guide them!`;
         history.push({ role: 'user', text: helpPrompt });
         const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
           messages: toConnectMessages(history.slice(-MAX_HISTORY))

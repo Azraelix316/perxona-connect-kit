@@ -1182,20 +1182,19 @@ app.post("/api/predict", async (req, res) => {
     return;
   }
 
-  const systemPrompt = `You are a pixel-perfect screen OCR and visual UI element localizer.
+  const systemPrompt = `You are a universal pixel-perfect screen OCR and visual UI element localizer for all desktop applications (creative software, browsers, productivity tools, spreadsheets, enterprise apps, media tools, etc.).
 Perform deep spatial visual grounding on this desktop screenshot.
 ${memoryProfile ? `User Profile: ${memoryProfile}` : ""}
 
-1. "screenContext": Specific description of active application, window title, open files/tabs, and current task.
-2. "spatialContext": Spatial breakdown of major UI panels (left sidebar, center editor, bottom terminal, right panel).
-3. "prediction": An observant 1-sentence proactive guidance question.
-4. "activeApp": Foreground app name.
-5. "highlight": Exact 2D bounding box of the single most relevant button, tab, link, or input element that the user should click or look at:
+1. "screenContext": Specific description of active application, window title, open documents/tabs/views, and current workflow.
+2. "spatialContext": Spatial breakdown of major UI panels (top toolbar/menu, left tool strip/navigation, central workspace/document/content, right inspector/sidebar).
+3. "prediction": An observant 1-sentence proactive guidance question relevant to their active task.
+4. "activeApp": Foreground application name.
+5. "highlight": Exact 2D bounding box of the single most relevant button, tab, link, menu item, or input element that the user is likely to interact with next:
    {
      "label": "exact text on target element",
      "box_2d": [ymin, xmin, ymax, xmax]  // Exact integer bounding box on 0-1000 scale: [top, left, bottom, right]
    }
-   Example: For a tab named "renderer.js" near top-left: {"label": "renderer.js tab", "box_2d": [28, 115, 52, 195]}
    If no specific actionable element is relevant, set "highlight": null.
 
 Return ONLY a valid JSON object in this exact schema:
@@ -1241,56 +1240,85 @@ Return ONLY a valid JSON object in this exact schema:
 });
 
 // POST /api/verify-task
-// Evaluates whether the user completed their guided action or needs supportive assistance
+// Compares previous screen state vs current screen state to detect visual difference, task completion, and progressive support
 app.post("/api/verify-task", async (req, res) => {
   const visionKey = process.env.GEMINI_API_KEY || process.env.VISION_API_KEY;
   if (!visionKey) {
     res.status(501).json({ error: "GEMINI_API_KEY not configured." });
     return;
   }
-  const { screenshot_base64, activeTask, elapsedSeconds } = req.body ?? {};
+  const { screenshot_base64, previous_screenshot_base64, activeTask, elapsedSeconds, supportCount = 0 } = req.body ?? {};
   if (!screenshot_base64 || !activeTask) {
     res.status(400).json({ error: "'screenshot_base64' and 'activeTask' are required." });
     return;
   }
 
-  const systemPrompt = `You are NavGuide's real-time Task Completion & User Support Engine.
-The user was guided with a visual highlight to click or open target: "${activeTask.label || 'target UI element'}".
+  const systemPrompt = `You are NavGuide's real-time Visual Task Difference & Continuous Desktop Support Engine for all software interfaces.
+The user is working on target element: "${activeTask.label || 'target UI element'}".
 Elapsed time: ${elapsedSeconds || 0} seconds.
+Assistance tier: Attempt #${supportCount + 1}.
 
-Analyze this new desktop screenshot:
-1. "isCompleted": true if the action was performed (e.g. the file/tab is now open and active in the editor, modal has proceeded, page has changed, or target was clicked). Otherwise false.
-2. "isStuck": true if ${elapsedSeconds || 0} >= 12 and "isCompleted" is false.
-3. "supportAdvice": If stuck, formulate 1 specific, practical micro-hint to help them find or trigger it (e.g. "You can also press Ctrl+P and type renderer.js", "Look near the top left of the window"). If completed or not stuck, return "".
-4. "nextStep": If completed, brief note on what they can do next.
+Compare Image 1 (previous screen state) and Image 2 (current screen state):
+1. "visualDiff": Describe what visually changed between the two states (e.g. newly opened menus, cursor position, active selection, changed values, dialog boxes, or if screen remains identical).
+2. "isCompleted": true if the target action was performed (e.g. target was clicked/toggled, target view/dialog opened, selection changed, page/canvas updated, or form submitted). Otherwise false.
+3. "isStuck": true if ${elapsedSeconds || 0} >= 10 and "isCompleted" is false.
+4. "supportAdvice": Provide progressive, context-aware coaching tailored to the detected visual difference and Attempt #${supportCount + 1}:
+   - Attempt 1: Specific spatial landmark and visual appearance (e.g. "Look for the button near the top toolbar", "It's on the left navigation panel").
+   - Attempt 2: Direct interaction tip, shortcut, or menu path appropriate for this specific application.
+   - Attempt 3: Alternative way to achieve the goal in this software interface.
+   - Attempt 4+: Clear, step-by-step guidance referencing visible surrounding UI elements.
+   If completed or not stuck, return "".
+5. "nextStep": If completed, brief note on what the user can do next.
+
+Universal Software Rule:
+Analyze ANY desktop software (design tools, web browsers, spreadsheets, office apps, creative suites, media tools, system utilities, etc.) dynamically based strictly on visible UI elements without assuming any specific domain.
 
 Return ONLY a valid JSON object:
 {
+  "visualDiff": "Description of screen difference between previous and current state",
   "isCompleted": false,
   "isStuck": false,
   "supportAdvice": "",
   "nextStep": ""
 }`;
 
+  const userContent = [
+    { type: "text", text: `Compare the previous desktop state with the current desktop state to check progress on target: "${activeTask.label}".` }
+  ];
+
+  if (previous_screenshot_base64) {
+    userContent.push({
+      type: "image_url",
+      image_url: { url: previous_screenshot_base64 }
+    });
+    userContent.push({
+      type: "text",
+      text: "[Image 1 Above: Previous Screen State when guidance was given]"
+    });
+  }
+
+  userContent.push({
+    type: "image_url",
+    image_url: { url: screenshot_base64 }
+  });
+  userContent.push({
+    type: "text",
+    text: "[Image 2 Above: Current Screen State now]"
+  });
+
   const messages = [
     { role: "system", content: systemPrompt },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: `Verify if target "${activeTask.label}" action is completed or if user needs help.` },
-        { type: "image_url", image_url: { url: screenshot_base64 } }
-      ]
-    }
+    { role: "user", content: userContent }
   ];
 
   try {
-    const payload = await requestVisionCompletion(messages, { maxTokens: 400 });
+    const payload = await requestVisionCompletion(messages, { maxTokens: 450 });
     const text = llmResponseText(payload);
-    const parsed = parseJsonFromLlm(text) ?? { isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" };
+    const parsed = parseJsonFromLlm(text) ?? { visualDiff: "", isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" };
     res.json(parsed);
   } catch (err) {
     console.error(`POST /api/verify-task error:`, err);
-    res.status(502).json({ isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" });
+    res.status(502).json({ visualDiff: "", isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" });
   }
 });
 
