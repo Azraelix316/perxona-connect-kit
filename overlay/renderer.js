@@ -333,14 +333,17 @@ async function sendUserMessage(text, precomputedHighlight = null) {
     // 3. Handle highlights & prediction pause based on intent
     if (isNegative) {
       console.log('[User Response: Negative] User declined. Pausing predictions for 90s.');
+      activeTask = null;
+      if (taskVerificationInterval) {
+        clearInterval(taskVerificationInterval);
+        taskVerificationInterval = null;
+      }
       window.electronAPI?.hideHighlight?.();
       window.electronAPI?.pausePredictions?.(90000);
     } else if ((isAffirmative || /click|where|show|point/i.test(userText)) && highlightTarget) {
       console.log('[User Response: Affirmative] Triggering desktop highlight overlay at:', highlightTarget);
       window.electronAPI?.showHighlight?.(highlightTarget);
-      setTimeout(() => {
-        window.electronAPI?.hideHighlight?.();
-      }, 9000);
+      startTaskTracking(highlightTarget);
     }
 
     // 4. Compile message for Perxona Chatbot with full spatial intelligence
@@ -388,6 +391,82 @@ async function sendUserMessage(text, precomputedHighlight = null) {
   } finally {
     isBusy = false;
   }
+}
+
+// ── Active Task Completion & Supportive Coaching Loop ──────────────────────
+
+let activeTask = null;
+let taskVerificationInterval = null;
+
+function startTaskTracking(target) {
+  if (!target) return;
+  activeTask = {
+    label: target.label || 'Target Element',
+    box_2d: target.box_2d,
+    startedAt: Date.now(),
+    lastSupportAt: Date.now(),
+    supportCount: 0
+  };
+
+  if (taskVerificationInterval) clearInterval(taskVerificationInterval);
+  taskVerificationInterval = setInterval(async () => {
+    if (!activeTask) {
+      clearInterval(taskVerificationInterval);
+      taskVerificationInterval = null;
+      return;
+    }
+
+    try {
+      const screenshot = await window.electronAPI?.captureScreen?.();
+      if (!screenshot || !activeTask) return;
+
+      const elapsedSeconds = Math.round((Date.now() - activeTask.startedAt) / 1000);
+      const res = await apiRequest('/api/verify-task', {
+        screenshot_base64: screenshot,
+        activeTask,
+        elapsedSeconds
+      }).catch(() => null);
+
+      if (res?.isCompleted && activeTask) {
+        console.log(`[Task Verification] Success! User completed action on "${activeTask.label}". Auto-dismissing highlight.`);
+        window.electronAPI?.hideHighlight?.();
+        const completedTaskLabel = activeTask.label;
+        activeTask = null;
+        if (taskVerificationInterval) {
+          clearInterval(taskVerificationInterval);
+          taskVerificationInterval = null;
+        }
+
+        // Chime in with celebration & next step
+        const confirmPrompt = `[Task Success: User just successfully clicked/opened "${completedTaskLabel}". Next: "${res.nextStep || ''}"] Acknowledge their progress enthusiastically in 1 brief friendly sentence!`;
+        history.push({ role: 'user', text: confirmPrompt });
+        const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
+          messages: toConnectMessages(history.slice(-MAX_HISTORY))
+        });
+        const reply = chatRes?.reply_text || `Great job! You opened ${completedTaskLabel}.`;
+        showBubble('NavGuide', reply, 12000);
+        history.push({ role: 'assistant', text: reply });
+        await speakWithAvatar(reply);
+      } else if (res?.isStuck && res?.supportAdvice && activeTask && (Date.now() - activeTask.lastSupportAt > 16000) && activeTask.supportCount < 2) {
+        activeTask.lastSupportAt = Date.now();
+        activeTask.supportCount++;
+        console.log(`[Task Support] User seems stuck on "${activeTask.label}". Offering supportive hint: ${res.supportAdvice}`);
+
+        // Provide proactive assistive support
+        const helpPrompt = `[Supportive Coaching: User is still looking for "${activeTask.label}". Helpful Hint: "${res.supportAdvice}"] Chime in with 1 warm, supportive sentence offering this helpful hint to guide them!`;
+        history.push({ role: 'user', text: helpPrompt });
+        const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
+          messages: toConnectMessages(history.slice(-MAX_HISTORY))
+        });
+        const reply = chatRes?.reply_text || res.supportAdvice;
+        showBubble('NavGuide', reply, 16000);
+        history.push({ role: 'assistant', text: reply });
+        await speakWithAvatar(reply);
+      }
+    } catch (e) {
+      // Fail silently in background check loop
+    }
+  }, 3500);
 }
 
 async function compressUserMemory(userText, assistantText) {

@@ -1240,6 +1240,60 @@ Return ONLY a valid JSON object in this exact schema:
   }
 });
 
+// POST /api/verify-task
+// Evaluates whether the user completed their guided action or needs supportive assistance
+app.post("/api/verify-task", async (req, res) => {
+  const visionKey = process.env.GEMINI_API_KEY || process.env.VISION_API_KEY;
+  if (!visionKey) {
+    res.status(501).json({ error: "GEMINI_API_KEY not configured." });
+    return;
+  }
+  const { screenshot_base64, activeTask, elapsedSeconds } = req.body ?? {};
+  if (!screenshot_base64 || !activeTask) {
+    res.status(400).json({ error: "'screenshot_base64' and 'activeTask' are required." });
+    return;
+  }
+
+  const systemPrompt = `You are NavGuide's real-time Task Completion & User Support Engine.
+The user was guided with a visual highlight to click or open target: "${activeTask.label || 'target UI element'}".
+Elapsed time: ${elapsedSeconds || 0} seconds.
+
+Analyze this new desktop screenshot:
+1. "isCompleted": true if the action was performed (e.g. the file/tab is now open and active in the editor, modal has proceeded, page has changed, or target was clicked). Otherwise false.
+2. "isStuck": true if ${elapsedSeconds || 0} >= 12 and "isCompleted" is false.
+3. "supportAdvice": If stuck, formulate 1 specific, practical micro-hint to help them find or trigger it (e.g. "You can also press Ctrl+P and type renderer.js", "Look near the top left of the window"). If completed or not stuck, return "".
+4. "nextStep": If completed, brief note on what they can do next.
+
+Return ONLY a valid JSON object:
+{
+  "isCompleted": false,
+  "isStuck": false,
+  "supportAdvice": "",
+  "nextStep": ""
+}`;
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `Verify if target "${activeTask.label}" action is completed or if user needs help.` },
+        { type: "image_url", image_url: { url: screenshot_base64 } }
+      ]
+    }
+  ];
+
+  try {
+    const payload = await requestVisionCompletion(messages, { maxTokens: 400 });
+    const text = llmResponseText(payload);
+    const parsed = parseJsonFromLlm(text) ?? { isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" };
+    res.json(parsed);
+  } catch (err) {
+    console.error(`POST /api/verify-task error:`, err);
+    res.status(502).json({ isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" });
+  }
+});
+
 // POST /api/vision-chat
 // Full multimodal conversational response with speech, highlight coordinates, and emotion
 app.post("/api/vision-chat", async (req, res) => {

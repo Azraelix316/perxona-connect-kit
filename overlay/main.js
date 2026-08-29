@@ -123,6 +123,15 @@ async function checkAndRunPrediction() {
 
     const diffRatio = calculatePixelColorDiff(frame.buffer, lastCapturedBuffer);
 
+    // Auto-dismiss highlight on large visual screen change (>18% screen change)
+    if (diffRatio >= 0.18) {
+      if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+        console.log(`[Auto-Dismiss Highlight] Screen changed by ${(diffRatio * 100).toFixed(1)}% -> auto-dismissing highlight.`);
+        overlayWindow.webContents.send('hide-highlight');
+        overlayWindow.hide();
+      }
+    }
+
     // Only update stored buffer if there was some change
     if (diffRatio > 0.05) {
       lastCapturedBuffer = frame.buffer;
@@ -352,9 +361,13 @@ ipcMain.on('show-highlight', (_event, rect) => {
     height = Math.max(normalizeCoordinate(rawH, screenH, 36), 24);
   }
 
-  // Ensure minimum visible size and padding
-  width = Math.max(width, 70);
-  height = Math.max(height, 28);
+  // Add generous breathing buffer around target (14px horizontally, 8px vertically)
+  const BUFFER_X = 14;
+  const BUFFER_Y = 8;
+  x = Math.max(0, x - BUFFER_X);
+  y = Math.max(0, y - BUFFER_Y);
+  width = width + (BUFFER_X * 2);
+  height = height + (BUFFER_Y * 2);
 
   console.log(`[Pixel-Perfect Highlight] Mapped to (${x}px, ${y}px, ${width}x${height}px) on ${screenW}x${screenH} viewport | Label: "${rect.label || 'Target'}"`);
 

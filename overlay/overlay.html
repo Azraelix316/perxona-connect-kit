@@ -21,53 +21,86 @@
     #highlight-box {
       position: absolute;
       display: none;
-      border: 3px solid #7c9cf5;
-      border-radius: 12px;
-      box-shadow: 0 0 25px rgba(124, 156, 245, 0.85), inset 0 0 15px rgba(124, 156, 245, 0.35);
-      animation: pulse-ring 1.4s ease-in-out infinite;
-      transition: all 0.25s ease-out;
-      pointer-events: none;
+      border: 3px solid #38bdf8;
+      border-radius: 14px;
+      box-shadow: 0 0 24px rgba(56, 189, 248, 0.8), inset 0 0 14px rgba(56, 189, 248, 0.35);
+      animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      transition: all 0.2s ease-out;
+      pointer-events: auto;
+      cursor: pointer;
       z-index: 999999;
     }
     #highlight-box.active {
       display: block;
     }
+    /* Outer pulsing ripple wave */
+    #highlight-box::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+      border: 2px solid rgba(56, 189, 248, 0.6);
+      border-radius: 18px;
+      animation: ripple-wave 1.5s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+      pointer-events: none;
+    }
     #highlight-tag {
       position: absolute;
-      top: -32px;
+      top: -36px;
       left: 50%;
       transform: translateX(-50%);
-      background: #7c9cf5;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
       color: #0b1020;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
       font-weight: 700;
-      padding: 4px 10px;
-      border-radius: 6px;
+      padding: 5px 12px;
+      border-radius: 8px;
       white-space: nowrap;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4), 0 0 12px rgba(56, 189, 248, 0.6);
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
+      animation: float-tag 2s ease-in-out infinite;
+      pointer-events: auto;
     }
     #highlight-tag::after {
       content: "";
       position: absolute;
-      bottom: -5px;
+      bottom: -6px;
       left: 50%;
       transform: translateX(-50%);
-      border-width: 5px 5px 0 5px;
+      border-width: 6px 6px 0 6px;
       border-style: solid;
-      border-color: #7c9cf5 transparent transparent transparent;
+      border-color: #818cf8 transparent transparent transparent;
     }
     @keyframes pulse-ring {
       0%, 100% {
         transform: scale(1);
-        box-shadow: 0 0 20px rgba(124, 156, 245, 0.7), inset 0 0 10px rgba(124, 156, 245, 0.25);
+        border-color: #38bdf8;
+        box-shadow: 0 0 22px rgba(56, 189, 248, 0.8), inset 0 0 12px rgba(56, 189, 248, 0.3);
       }
       50% {
-        transform: scale(1.03);
-        box-shadow: 0 0 35px rgba(124, 156, 245, 1), inset 0 0 20px rgba(124, 156, 245, 0.5);
+        transform: scale(1.02);
+        border-color: #818cf8;
+        box-shadow: 0 0 38px rgba(129, 140, 248, 1), inset 0 0 20px rgba(129, 140, 248, 0.5);
+      }
+    }
+    @keyframes ripple-wave {
+      0% {
+        transform: scale(0.98);
+        opacity: 0.85;
+      }
+      100% {
+        transform: scale(1.16);
+        opacity: 0;
+      }
+    }
+    @keyframes float-tag {
+      0%, 100% {
+        transform: translate(-50%, 0);
+      }
+      50% {
+        transform: translate(-50%, -4px);
       }
     }
   </style>
@@ -79,6 +112,14 @@
   <script>
     const highlightBox = document.getElementById("highlight-box");
     const highlightTag = document.getElementById("highlight-tag");
+
+    // Click on the highlight box dismisses it
+    highlightBox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      console.log('[Overlay.html] User clicked highlight box -> dismissing.');
+      highlightBox.classList.remove("active");
+      window.electronAPI?.hideHighlight?.();
+    });
 
     window.electronAPI?.onHighlight?.((data) => {
       console.log('[Overlay.html] onHighlight received:', JSON.stringify(data));
