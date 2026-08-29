@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NavGuide Screen Overlay</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+      overflow: hidden;
+      pointer-events: none;
+      user-select: none;
+    }
+    #highlight-box {
+      position: absolute;
+      display: none;
+      border: 3px solid #7c9cf5;
+      border-radius: 12px;
+      box-shadow: 0 0 25px rgba(124, 156, 245, 0.85), inset 0 0 15px rgba(124, 156, 245, 0.35);
+      animation: pulse-ring 1.4s ease-in-out infinite;
+      transition: all 0.25s ease-out;
+      pointer-events: none;
+      z-index: 999999;
+    }
+    #highlight-box.active {
+      display: block;
+    }
+    #highlight-tag {
+      position: absolute;
+      top: -32px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #7c9cf5;
+      color: #0b1020;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    #highlight-tag::after {
+      content: "";
+      position: absolute;
+      bottom: -5px;
+      left: 50%;
+      transform: translateX(-50%);
+      border-width: 5px 5px 0 5px;
+      border-style: solid;
+      border-color: #7c9cf5 transparent transparent transparent;
+    }
+    @keyframes pulse-ring {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 20px rgba(124, 156, 245, 0.7), inset 0 0 10px rgba(124, 156, 245, 0.25);
+      }
+      50% {
+        transform: scale(1.03);
+        box-shadow: 0 0 35px rgba(124, 156, 245, 1), inset 0 0 20px rgba(124, 156, 245, 0.5);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="highlight-box">
+    <div id="highlight-tag">👉 Click Here</div>
+  </div>
+  <script>
+    const highlightBox = document.getElementById("highlight-box");
+    const highlightTag = document.getElementById("highlight-tag");
+
+    window.electronAPI?.onHighlight?.((data) => {
+      if (!data || !data.rect) {
+        highlightBox.classList.remove("active");
+        return;
+      }
+      const { x, y, width, height, label } = data.rect;
+      highlightBox.style.left = (x || 0) + "px";
+      highlightBox.style.top = (y || 0) + "px";
+      highlightBox.style.width = Math.max(width || 80, 50) + "px";
+      highlightBox.style.height = Math.max(height || 40, 30) + "px";
+      if (label) {
+        highlightTag.textContent = "👉 " + label;
+      } else {
+        highlightTag.textContent = "👉 Click Here";
+      }
+      highlightBox.classList.add("active");
+    });
+
+    window.electronAPI?.onHideHighlight?.(() => {
+      highlightBox.classList.remove("active");
+    });
+  </script>
+</body>
+</html>

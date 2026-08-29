@@ -518,29 +518,21 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 
 // ── Middleware ─────────────────────────────────────────────────────────────
 
+// Enable CORS for Electron overlay and local tools
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Connect-Key");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.static("public", { etag: !IS_DEV }));
 
-// The knowledge upload route needs a larger JSON body than the 100 KB default,
-// and body-parser is a no-op once a body has already been parsed, so its parser
-// must run before the global one. Mounting it by path lets Express match it the
-// same way it matches the route itself (trailing slash, case-insensitive).
-// base64 adds ~33% overhead, so a 1 MB file needs ~1.4 MB of JSON. The 5 MB
-// limit is deliberately looser: it bounds what this process will buffer, while
-// KNOWLEDGE_MAX_FILE_BYTES is the limit users are held to.
-app.use(
-  "/api/chatbots/:id/knowledge",
-  express.json({ limit: "5mb" }),
-  // body-parser answers an oversized body with an HTML stack trace; restate it
-  // as the same JSON error the decoded-size check in the route returns.
-  (err, _req, res, next) => {
-    if (err?.type === "entity.too.large") {
-      res.status(413).json({ error: KNOWLEDGE_TOO_LARGE_MESSAGE });
-      return;
-    }
-    next(err);
-  },
-);
-app.use(express.json());
+// Increase JSON limit to 10MB to accommodate base64 screenshots and knowledge files
+app.use(express.json({ limit: "10mb" }));
 
 /**
  * Wrap a route handler so any thrown error (an upstream failure surfaced by
@@ -708,17 +700,40 @@ const LLM_DEFAULTS = {
   },
 };
 
-function llmRequestConfig(messages) {
+function llmRequestConfig(messages, { maxTokens = 1024, responseFormat } = {}) {
   const fallback = LLM_DEFAULTS[LLM_PROVIDER] ?? LLM_DEFAULTS.openai;
   const model = process.env.LLM_MODEL ?? fallback.model;
   if (LLM_PROVIDER === "anthropic") {
     const system = messages
       .filter(({ role }) => role === "system")
-      .map(({ content }) => content)
+      .map(({ content }) => (typeof content === "string" ? content : JSON.stringify(content)))
       .join("\n");
     const userMessages = messages
       .filter(({ role }) => role !== "system")
-      .map(({ role, content }) => ({ role, content }));
+      .map(({ role, content }) => {
+        if (Array.isArray(content)) {
+          // Format multimodal content for Anthropic
+          const anthropicContent = content.map((item) => {
+            if (item.type === "image_url" && item.image_url?.url) {
+              const url = item.image_url.url;
+              const match = url.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+              if (match) {
+                return {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: match[1],
+                    data: match[2],
+                  },
+                };
+              }
+            }
+            return item;
+          });
+          return { role, content: anthropicContent };
+        }
+        return { role, content };
+      });
     return {
       url: `${process.env.LLM_BASE_URL ?? fallback.baseUrl}/v1/messages`,
       headers: {
@@ -728,7 +743,7 @@ function llmRequestConfig(messages) {
       },
       body: {
         model,
-        max_tokens: 1024,
+        max_tokens: maxTokens,
         ...(system ? { system } : {}),
         messages: userMessages,
       },
@@ -740,18 +755,23 @@ function llmRequestConfig(messages) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${LLM_API_KEY}`,
     },
-    body: { model, messages },
+    body: {
+      model,
+      messages,
+      max_tokens: maxTokens,
+      ...(responseFormat ? { response_format: responseFormat } : {}),
+    },
   };
 }
 
-async function requestLlmCompletion(messages) {
+async function requestLlmCompletion(messages, options = {}) {
   if (LLM_PROVIDER !== "openai" && LLM_PROVIDER !== "anthropic") {
     throw Object.assign(
       new Error("LLM_PROVIDER must be either 'openai' or 'anthropic'."),
       { status: 500 },
     );
   }
-  const request = llmRequestConfig(messages);
+  const request = llmRequestConfig(messages, options);
   const response = await fetch(request.url, {
     method: "POST",
     headers: request.headers,
@@ -759,7 +779,8 @@ async function requestLlmCompletion(messages) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw Object.assign(new Error("LLM request failed."), {
+    const errorMsg = payload.error?.message ?? payload.message ?? JSON.stringify(payload);
+    throw Object.assign(new Error(`LLM request failed: ${errorMsg}`), {
       status: 502,
       payload,
     });
@@ -772,6 +793,27 @@ function llmResponseText(payload) {
     return payload.content?.find(({ type }) => type === "text")?.text;
   }
   return payload.choices?.[0]?.message?.content;
+}
+
+function parseJsonFromLlm(text) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {}
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (match) {
+    try {
+      return JSON.parse(match[1]);
+    } catch {}
+  }
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+    } catch {}
+  }
+  return null;
 }
 
 function openAiCompatibleResponse(payload) {
@@ -1081,6 +1123,206 @@ app.post("/api/chat", async (req, res) => {
     res
       .status(err.status ?? 502)
       .json({ error: "LLM upstream unreachable", message: String(err) });
+  }
+});
+
+// ── NavGuide Vision & Memory Routes ────────────────────────────────────────
+
+// POST /api/predict
+// Fast lightweight screen analysis for proactive predictions
+app.post("/api/predict", async (req, res) => {
+  if (!process.env.LLM_API_KEY) {
+    res.status(501).json({
+      error: "LLM_API_KEY not configured. Set it in .env to enable vision predictions.",
+    });
+    return;
+  }
+  const { screenshot_base64, memoryProfile } = req.body ?? {};
+  if (!screenshot_base64) {
+    res.status(400).json({ error: "'screenshot_base64' is required." });
+    return;
+  }
+
+  const systemPrompt = `You are NavGuide, an intelligent AI desktop companion.
+Analyze this screenshot of the user's screen.
+${memoryProfile ? `User Profile Context: ${memoryProfile}` : ""}
+
+In 1-2 concise, natural sentences:
+1. Identify the application or website currently on screen.
+2. Predict what specific task the user is performing or might need help with.
+
+Respond ONLY with a valid JSON object in this exact format:
+{
+  "prediction": "Looks like you're configuring your billing webhook in Stripe settings. Need help finding the endpoint URL?",
+  "activeApp": "Stripe Dashboard",
+  "confidence": "high"
+}`;
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "What am I doing on screen right now?" },
+        {
+          type: "image_url",
+          image_url: { url: screenshot_base64 },
+        },
+      ],
+    },
+  ];
+
+  try {
+    const payload = await requestLlmCompletion(messages, {
+      maxTokens: 200,
+      responseFormat: { type: "json_object" },
+    });
+    const text = llmResponseText(payload);
+    const parsed = parseJsonFromLlm(text) ?? {
+      prediction: text,
+      activeApp: "Active Application",
+      confidence: "medium",
+    };
+    res.json(parsed);
+  } catch (err) {
+    console.error(`POST /api/predict → ${err.status ?? 502}: ${err.message}`);
+    res
+      .status(err.status ?? 502)
+      .json({ error: "Prediction failed", message: String(err) });
+  }
+});
+
+// POST /api/vision-chat
+// Full multimodal conversational response with speech, highlight coordinates, and emotion
+app.post("/api/vision-chat", async (req, res) => {
+  if (!process.env.LLM_API_KEY) {
+    res.status(501).json({
+      error: "LLM_API_KEY not configured. Set it in .env to enable vision chat.",
+    });
+    return;
+  }
+  const { messages, screenshot_base64, prediction, memoryProfile } = req.body ?? {};
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({ error: "'messages' must be a non-empty array." });
+    return;
+  }
+
+  const systemPrompt = `You are NavGuide, a friendly, helpful AI desktop companion.
+You float directly on the user's screen as an avatar and guide them through software interfaces with your voice and visual highlights.
+
+${memoryProfile ? `User Profile/Habits: ${memoryProfile}` : ""}
+${prediction ? `Current Screen Context: ${prediction}` : ""}
+
+CRITICAL RULES:
+1. Speech must be 1-2 SHORT, natural sentences. No markdown, no bullet points, no code blocks, no robotic phrasing.
+2. Be spatially clear: explicitly state where buttons/menus are (e.g. "in the top right corner", "on the left sidebar", "near the bottom").
+3. If you are directing the user to click a specific UI element visible on screen, estimate its normalized percentage coordinates (0 to 100% of screen width and height):
+   "highlight": { "x_pct": 82, "y_pct": 14, "w_pct": 8, "h_pct": 4 }
+   If no specific button/area is being pointed out, set "highlight": null.
+4. Set "emotion" to one of: "encouraging", "thinking", "greeting", "neutral".
+
+Return ONLY a valid JSON object:
+{
+  "speech": "Click the Security tab on the left sidebar — I've highlighted it for you!",
+  "highlight": { "x_pct": 15, "y_pct": 32, "w_pct": 10, "h_pct": 4 },
+  "emotion": "encouraging"
+}`;
+
+  // Format messages
+  const lastUserMsg = messages[messages.length - 1];
+  const historyMsgs = messages.slice(0, -1);
+
+  const formattedMessages = [
+    { role: "system", content: systemPrompt },
+    ...historyMsgs.map((m) => ({
+      role: m.role,
+      content: typeof m.content === "string" ? m.content : (m.text ?? JSON.stringify(m)),
+    })),
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text:
+            typeof lastUserMsg.content === "string"
+              ? lastUserMsg.content
+              : (lastUserMsg.text ?? "Can you guide me on this screen?"),
+        },
+        ...(screenshot_base64
+          ? [
+              {
+                type: "image_url",
+                image_url: { url: screenshot_base64 },
+              },
+            ]
+          : []),
+      ],
+    },
+  ];
+
+  try {
+    const payload = await requestLlmCompletion(formattedMessages, {
+      maxTokens: 400,
+      responseFormat: { type: "json_object" },
+    });
+    const text = llmResponseText(payload);
+    const parsed = parseJsonFromLlm(text) ?? {
+      speech: text,
+      highlight: null,
+      emotion: "neutral",
+    };
+    res.json(parsed);
+  } catch (err) {
+    console.error(`POST /api/vision-chat → ${err.status ?? 502}: ${err.message}`);
+    res
+      .status(err.status ?? 502)
+      .json({ error: "Vision chat failed", message: String(err) });
+  }
+});
+
+// POST /api/compress-memory
+// Compresses past interaction history into a single compact profile sentence
+app.post("/api/compress-memory", async (req, res) => {
+  if (!process.env.LLM_API_KEY) {
+    res.status(501).json({
+      error: "LLM_API_KEY not configured.",
+    });
+    return;
+  }
+  const { currentProfile, recentInteractions } = req.body ?? {};
+
+  const systemPrompt = `You are a memory compaction system for an AI desktop companion.
+Take the user's current profile and their recent interaction summaries, and synthesize them into a SINGLE concise profile sentence (max 200 characters).
+Capture their key software habits, proficiencies, and areas where they need help.
+Return ONLY a valid JSON object:
+{
+  "profile": "Intermediate user on Windows. Comfortable with code editors, but needs step-by-step guidance for cloud console settings and billing."
+}`;
+
+  const userPrompt = `Current Profile: ${currentProfile || "None"}
+Recent interactions:
+${Array.isArray(recentInteractions) ? recentInteractions.join("\n") : (recentInteractions || "None")}`;
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+
+  try {
+    const payload = await requestLlmCompletion(messages, {
+      maxTokens: 150,
+      responseFormat: { type: "json_object" },
+    });
+    const text = llmResponseText(payload);
+    const parsed = parseJsonFromLlm(text) ?? {
+      profile: text,
+    };
+    res.json(parsed);
+  } catch (err) {
+    console.error(`POST /api/compress-memory → ${err.status ?? 502}: ${err.message}`);
+    res
+      .status(err.status ?? 502)
+      .json({ error: "Memory compression failed", message: String(err) });
   }
 });
 

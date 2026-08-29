@@ -3,54 +3,56 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Perxona Desktop Avatar</title>
+  <title>NavGuide — AI Desktop Companion</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Window Controls -->
-  <div class="window-controls">
-    <button id="minimize-btn" class="control-btn" title="Minimize">−</button>
-    <button id="close-btn" class="control-btn" title="Close">×</button>
-  </div>
+  <div class="app-container">
+    <!-- Window Controls -->
+    <div class="window-controls">
+      <button id="minimize-btn" class="control-btn" title="Minimize">−</button>
+      <button id="close-btn" class="control-btn" title="Close">×</button>
+    </div>
 
-  <!-- Avatar Container -->
-  <div class="avatar-container">
-    <sv-presenter id="presenter"></sv-presenter>
-    <div id="loading" class="loading">Loading avatar...</div>
-    <div id="error" class="error" hidden></div>
-  </div>
+    <!-- Dynamic Speech Bubble Popover -->
+    <div id="speech-bubble" class="speech-bubble">
+      <div id="bubble-role" class="bubble-role">NavGuide</div>
+      <div id="bubble-text" class="bubble-text">Hi! I'm watching your screen. Click me anytime for instant guidance!</div>
+    </div>
 
-  <!-- Input Controls -->
-  <div class="input-container">
-    <!-- Text Input -->
-    <div class="text-input-group">
-      <input 
-        type="text" 
-        id="text-input" 
-        placeholder="Type or speak..."
-        autocomplete="off"
-      />
-      <button id="send-btn" class="icon-btn" title="Send">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Avatar Stage -->
+    <div id="avatar-stage" class="avatar-stage" title="Click avatar for instant screen prediction!">
+      <sv-presenter id="presenter"></sv-presenter>
+      <div id="loading" class="stage-loading">Connecting avatar...</div>
+      <div id="error" class="stage-error" hidden></div>
+    </div>
+
+    <!-- Floating Action Controls -->
+    <div class="control-bar">
+      <button id="mic-btn" class="mic-btn" title="Click or hold to speak">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+      <button id="text-toggle-btn" class="text-toggle-btn" title="Type a message">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
       </button>
     </div>
 
-    <!-- Speech Controls -->
-    <div class="speech-controls">
-      <button id="mic-btn" class="mic-btn" title="Hold to speak">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-width="2"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <span id="listening-indicator" class="listening-indicator" hidden>Listening...</span>
+    <!-- Expandable Text Input Drawer -->
+    <div id="text-drawer" class="text-drawer">
+      <input type="text" id="text-input" class="text-input" placeholder="Ask anything about your screen..." autocomplete="off"/>
+      <button id="send-btn" class="send-btn">Send</button>
     </div>
-  </div>
 
-  <!-- Status Display -->
-  <div id="status" class="status"></div>
+    <!-- Status Toast -->
+    <div id="toast" class="toast"></div>
+  </div>
 
   <script type="module" src="renderer.js"></script>
 </body>

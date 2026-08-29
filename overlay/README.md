@@ -4,15 +4,13 @@ A transparent, floating Electron window that displays an AI avatar assistant fro
 
 ## Features
 
-- **Transparent Overlay Window** - Float above any application
-- **Avatar Only** - No background scene, just the avatar on a transparent canvas
-- **Speech Recognition** - Hold microphone button to speak (Web Speech API)
-- **Text Input** - Type messages or paste text
-- **LLM Integration** - Responses powered by Perxona chatbot
-- **Gesture Support** - Avatar performs motions synchronized with speech
-- **Window Controls** - Minimize and close buttons (no window frame)
-- **Always On Top** - Stays visible above other applications
-- **Draggable** - Move the window by dragging anywhere (except interactive elements)
+- **Transparent Desktop Companion** — Floats directly on your screen above any application without chunky window chrome or rectangular backgrounds.
+- **Proactive Screen Vision & Prediction** — Automatically monitors active screen content and pre-caches context. Click the avatar for instant guidance without typing a prompt!
+- **Intelligent Activity & Idle Monitoring** — Dynamically adjusts screen capture frequency (active vs. idle) to conserve system resources and API tokens.
+- **Click-Through Screen Highlights** — Projects glowing highlight rings over buttons and UI elements across any desktop app without blocking clicks.
+- **Voice-First Interaction** — Speak naturally using push-to-talk or click-to-speak via Web Speech API, with popover speech bubbles.
+- **Compact Adaptive Memory Bank** — Persists and compresses user habits into a compact profile (<1KB) across sessions.
+- **Perxona Avatar Integration** — Speaks with real-time lip-sync, thinking animations, and emotional gestures.
 
 ## Prerequisites
 
