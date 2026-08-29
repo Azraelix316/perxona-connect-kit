@@ -55,19 +55,26 @@ function saveMemoryData(data) {
 
 // ── Screen Capture & Difference Detection ──────────────────────────────────
 
-async function captureScreenFrame(width = 1280, height = 720) {
+async function captureScreenFrame() {
   try {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const scaleFactor = primaryDisplay.scaleFactor || 1.0;
+    const physW = Math.round(primaryDisplay.bounds.width * scaleFactor);
+    const physH = Math.round(primaryDisplay.bounds.height * scaleFactor);
+
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: { width, height }
+      thumbnailSize: { width: physW, height: physH }
     });
     if (sources && sources.length > 0) {
       const img = sources[0].thumbnail;
-      const base64 = img.toDataURL(); // 'data:image/png;base64,...'
-      const jpegBase64 = img.toJPEG(60).toString('base64');
+      const jpegBase64 = img.toJPEG(85).toString('base64');
       return {
         dataUrl: `data:image/jpeg;base64,${jpegBase64}`,
-        buffer: img.toBitmap()
+        buffer: img.toBitmap(),
+        width: physW,
+        height: physH,
+        scaleFactor
       };
     }
   } catch (err) {
@@ -233,8 +240,8 @@ function createWindows() {
 
   // 2. Fullscreen transparent highlight overlay window (hidden by default to prevent DWM alpha occlusion)
   overlayWindow = new BrowserWindow({
-    x: 0,
-    y: 0,
+    x: primaryDisplay.bounds.x,
+    y: primaryDisplay.bounds.y,
     width: primaryDisplay.bounds.width,
     height: primaryDisplay.bounds.height,
     transparent: true,
@@ -254,6 +261,10 @@ function createWindows() {
 
   overlayWindow.loadFile('overlay.html');
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  overlayWindow.webContents.on('console-message', (_event, _level, message) => {
+    console.log(`[Overlay Window] ${message}`);
+  });
 
   startActivityMonitor();
 }
@@ -289,6 +300,30 @@ ipcMain.on('set-draggable', (_event, draggable) => {
   mainWindow?.setIgnoreMouseEvents(!draggable, { forward: true });
 });
 
+// Universal coordinate normalizer: Auto-detects normalized (0-1), percent (0-100), 1000-grid, 10000-grid (Gemini standard), or direct pixel values
+function normalizeCoordinate(val, maxScreenDimension, fallback = 0) {
+  if (val === undefined || val === null) return fallback;
+  const num = parseFloat(String(val).replace('%', '').replace('px', ''));
+  if (isNaN(num)) return fallback;
+
+  if (num <= 1.0) {
+    // 0.0 to 1.0 (normalized unit vector)
+    return Math.round(num * maxScreenDimension);
+  } else if (num <= 100.0) {
+    // 0 to 100 percentage
+    return Math.round((num / 100) * maxScreenDimension);
+  } else if (num <= 1000.0) {
+    // 0 to 1000 normalized grid
+    return Math.round((num / 1000) * maxScreenDimension);
+  } else if (num <= 10000.0) {
+    // 0 to 10000 normalized grid (Gemini bounding box convention, e.g. 5804 -> 58.04%)
+    return Math.round((num / 10000) * maxScreenDimension);
+  } else {
+    // Direct pixels (clamped to screen size)
+    return Math.min(Math.round(num), maxScreenDimension);
+  }
+}
+
 // Highlighting
 ipcMain.on('show-highlight', (_event, rect) => {
   if (!overlayWindow || !rect) return;
@@ -296,28 +331,50 @@ ipcMain.on('show-highlight', (_event, rect) => {
   const screenW = primaryDisplay.bounds.width;
   const screenH = primaryDisplay.bounds.height;
 
-  // Convert percentage coordinates if needed
-  let x = rect.x;
-  let y = rect.y;
-  let width = rect.width;
-  let height = rect.height;
+  let x = 0, y = 0, width = 120, height = 36;
 
-  if (rect.x_pct !== undefined) {
-    x = Math.round((rect.x_pct / 100) * screenW);
-    y = Math.round((rect.y_pct / 100) * screenH);
-    width = Math.round(((rect.w_pct || 8) / 100) * screenW);
-    height = Math.round(((rect.h_pct || 4) / 100) * screenH);
+  // 1. Native Gemini 2D visual grounding box: [ymin, xmin, ymax, xmax] on 0-1000 scale
+  if (Array.isArray(rect.box_2d) && rect.box_2d.length === 4) {
+    const [ymin, xmin, ymax, xmax] = rect.box_2d.map(Number);
+    x = Math.round((xmin / 1000) * screenW);
+    y = Math.round((ymin / 1000) * screenH);
+    width = Math.round(((xmax - xmin) / 1000) * screenW);
+    height = Math.round(((ymax - ymin) / 1000) * screenH);
+  } else {
+    const rawX = rect.x !== undefined ? rect.x : rect.x_pct;
+    const rawY = rect.y !== undefined ? rect.y : rect.y_pct;
+    const rawW = rect.width !== undefined ? rect.width : (rect.w_pct !== undefined ? rect.w_pct : 8);
+    const rawH = rect.height !== undefined ? rect.height : (rect.h_pct !== undefined ? rect.h_pct : 4);
+
+    x = normalizeCoordinate(rawX, screenW, 0);
+    y = normalizeCoordinate(rawY, screenH, 0);
+    width = Math.max(normalizeCoordinate(rawW, screenW, 120), 60);
+    height = Math.max(normalizeCoordinate(rawH, screenH, 36), 24);
   }
 
-  // Show overlay window only when needed
+  // Ensure minimum visible size and padding
+  width = Math.max(width, 70);
+  height = Math.max(height, 28);
+
+  console.log(`[Pixel-Perfect Highlight] Mapped to (${x}px, ${y}px, ${width}x${height}px) on ${screenW}x${screenH} viewport | Label: "${rect.label || 'Target'}"`);
+
+  // Ensure overlayWindow matches current primary display geometry
+  overlayWindow.setBounds({
+    x: primaryDisplay.bounds.x,
+    y: primaryDisplay.bounds.y,
+    width: screenW,
+    height: screenH
+  });
+
+  // Show overlay window and raise z-order
   overlayWindow.showInactive();
-  overlayWindow.setAlwaysOnTop(true, 'floating');
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver', 999);
   overlayWindow.webContents.send('highlight', {
     rect: { x, y, width, height, label: rect.label }
   });
 
-  // Keep avatar on top
-  mainWindow?.setAlwaysOnTop(true, 'screen-saver', 999);
+  // Keep avatar above the overlay
+  mainWindow?.setAlwaysOnTop(true, 'screen-saver', 1000);
   mainWindow?.moveTop();
 });
 

@@ -81,6 +81,7 @@
     const highlightTag = document.getElementById("highlight-tag");
 
     window.electronAPI?.onHighlight?.((data) => {
+      console.log('[Overlay.html] onHighlight received:', JSON.stringify(data));
       if (!data || !data.rect) {
         highlightBox.classList.remove("active");
         return;
@@ -99,6 +100,7 @@
     });
 
     window.electronAPI?.onHideHighlight?.(() => {
+      console.log('[Overlay.html] onHideHighlight received');
       highlightBox.classList.remove("active");
     });
   </script>

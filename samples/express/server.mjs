@@ -1182,22 +1182,29 @@ app.post("/api/predict", async (req, res) => {
     return;
   }
 
-  const systemPrompt = `You are NavGuide's screen parser.
-Analyze this screen capture of the user's desktop purely to extract context and clickable coordinates.
+  const systemPrompt = `You are a pixel-perfect screen OCR and visual UI element localizer.
+Perform deep spatial visual grounding on this desktop screenshot.
 ${memoryProfile ? `User Profile: ${memoryProfile}` : ""}
 
-1. Identify the application, webpage, and current workflow.
-2. Formulate a short 1-sentence screen summary.
-3. If a key clickable button or navigation element is visible, estimate its percentage coordinates (0 to 100%):
-   "highlight": { "x_pct": 82, "y_pct": 14, "w_pct": 8, "h_pct": 4 }
-   Otherwise set "highlight": null.
+1. "screenContext": Specific description of active application, window title, open files/tabs, and current task.
+2. "spatialContext": Spatial breakdown of major UI panels (left sidebar, center editor, bottom terminal, right panel).
+3. "prediction": An observant 1-sentence proactive guidance question.
+4. "activeApp": Foreground app name.
+5. "highlight": Exact 2D bounding box of the single most relevant button, tab, link, or input element that the user should click or look at:
+   {
+     "label": "exact text on target element",
+     "box_2d": [ymin, xmin, ymax, xmax]  // Exact integer bounding box on 0-1000 scale: [top, left, bottom, right]
+   }
+   Example: For a tab named "renderer.js" near top-left: {"label": "renderer.js tab", "box_2d": [28, 115, 52, 195]}
+   If no specific actionable element is relevant, set "highlight": null.
 
-Return ONLY a valid JSON object in this exact format:
+Return ONLY a valid JSON object in this exact schema:
 {
-  "screenContext": "Stripe Dashboard on Webhooks settings page",
-  "prediction": "User is viewing Stripe Webhook Settings.",
-  "activeApp": "Stripe Dashboard",
-  "highlight": null
+  "screenContext": "Detailed description of application and active task",
+  "spatialContext": "Detailed spatial layout of windows, panels, and UI zones",
+  "prediction": "Natural, observant question or guidance offer",
+  "activeApp": "Application Name",
+  "highlight": { "label": "Save Changes", "box_2d": [120, 450, 155, 550] }
 }`;
 
   const messages = [
@@ -1205,7 +1212,7 @@ Return ONLY a valid JSON object in this exact format:
     {
       role: "user",
       content: [
-        { type: "text", text: "Analyze what is on screen and where key elements are located." },
+        { type: "text", text: "Perform pixel-perfect visual OCR and UI grounding on this desktop screenshot. Find the exact [ymin, xmin, ymax, xmax] coordinates (0-1000 integer scale) of the target element." },
         {
           type: "image_url",
           image_url: { url: screenshot_base64 },
@@ -1215,10 +1222,11 @@ Return ONLY a valid JSON object in this exact format:
   ];
 
   try {
-    const payload = await requestVisionCompletion(messages, { maxTokens: 600 });
+    const payload = await requestVisionCompletion(messages, { maxTokens: 900 });
     const text = llmResponseText(payload);
     const parsed = parseJsonFromLlm(text) ?? {
       screenContext: text,
+      spatialContext: "",
       prediction: text,
       activeApp: "Active Application",
       highlight: null,

@@ -235,6 +235,7 @@ const toConnectMessages = (turns) =>
 // ── Proactive Click Summoning & Multimodal Conversation ───────────────────
 
 let isBusy = false;
+let latestPredictionData = null;
 
 async function handleAvatarClick() {
   if (isBusy) return;
@@ -245,23 +246,25 @@ async function handleAvatarClick() {
     await unlockAudio();
     showToast('Observing screen...');
 
-    // 1. Capture screen and analyze with Gemini Vision
+    // 1. Capture screen and analyze with Gemini Spatial Vision
     console.log('[Step 1] Capturing desktop screen...');
     const screenshot = await window.electronAPI?.captureScreen?.();
     const memory = await window.electronAPI?.getMemory?.();
 
-    console.log('[Step 2] Sending screen capture to Gemini 3.5 Flash Lite (/api/predict)...');
+    console.log('[Step 2] Performing deep spatial analysis via Gemini 3.5 Flash Lite (/api/predict)...');
     let analysis = await apiRequest('/api/predict', {
       screenshot_base64: screenshot,
       memoryProfile: memory?.profile || ''
     }).catch(() => null);
 
+    latestPredictionData = analysis;
     const screenDesc = analysis?.screenContext || analysis?.prediction || "the user's current screen";
-    const highlightTarget = analysis?.highlight;
-    console.log(`[Step 3] Gemini Vision output: "${screenDesc}"`);
+    const spatialDesc = analysis?.spatialContext || "standard desktop layout";
+    console.log(`[Step 3] Gemini Vision: "${screenDesc}"`);
+    console.log(`[Step 3b] Spatial Layout: "${spatialDesc}"`);
 
-    // 2. Compile prompt for Perxona Chatbot including Gemini's visual intelligence
-    const promptForPerxona = `[Visual Screen Context: ${screenDesc}. Prediction: ${analysis?.prediction || ''}] Greet the user in 1 concise sentence and offer specific guidance for this screen.`;
+    // 2. Compile prompt for Perxona Chatbot with full spatial intelligence
+    const promptForPerxona = `[Spatial Screen Context: ${screenDesc}. Spatial Layout: ${spatialDesc}. Next Recommended Target: ${analysis?.highlight?.label || 'None'}] Greet the user in 1 concise sentence mentioning what they are looking at and ask if they would like you to guide them or point out where to click.`;
     history.push({ role: 'user', text: promptForPerxona });
 
     // 3. Request reply from Perxona Chatbot
@@ -270,34 +273,13 @@ async function handleAvatarClick() {
       messages: toConnectMessages(history.slice(-MAX_HISTORY))
     });
 
-    const replyText = chatbotRes?.reply_text || analysis?.prediction || "I'm watching your screen! Need help with anything here?";
+    const replyText = chatbotRes?.reply_text || analysis?.prediction || "I'm watching your screen! Let me know if you'd like me to point out where to click.";
     console.log(`[Step 5] Perxona Chatbot reply: "${replyText}"`);
     history.push({ role: 'assistant', text: replyText });
 
-    // 4. Present interactive quick buttons
-    const actions = [
-      {
-        label: '💡 Help Me With This',
-        action: () => sendUserMessage('Please guide me step by step on what to do on this screen.')
-      },
-      {
-        label: '📍 Point Out Target',
-        action: () => sendUserMessage('Please point out where to click on this screen.', highlightTarget)
-      },
-      {
-        label: '❌ Not Now',
-        secondary: true,
-        action: () => {
-          window.electronAPI?.hideHighlight?.();
-          window.electronAPI?.pausePredictions?.(90000);
-          hideBubble();
-          speakWithAvatar("Got it! I'll give you space and won't interrupt.");
-        }
-      }
-    ];
-
+    // 4. Render speech bubble directly in UI without buttons
     console.log('[Step 6] Rendering speech bubble in UI...');
-    showBubble('NavGuide', replyText, 18000, actions);
+    showBubble('NavGuide', replyText, 20000);
 
     // 5. Avatar speaks with official Perxona voice & lip-sync motions
     console.log('[Step 7] Calling avatar speech synthesis...');
@@ -325,27 +307,56 @@ async function sendUserMessage(text, precomputedHighlight = null) {
     showBubble('You', userText, 4000);
     showToast('Analyzing screen...');
 
+    // Natural Language Intent Interpretation (Yes / Affirmative vs No / Negative)
+    const isAffirmative = /\b(yes|yeah|sure|yep|ok|okay|please|show|point|where|help|guide|how|tell me|do it|continue|go ahead|y)\b/i.test(userText);
+    const isNegative = /\b(no|nope|nah|don't|dont|not now|cancel|stop|i'm good|im good|never mind|dismiss|n)\b/i.test(userText);
+
     // 1. Capture screen
     console.log('[Step 1] Capturing desktop frame...');
     const screenshot = await window.electronAPI?.captureScreen?.();
     const memory = await window.electronAPI?.getMemory?.();
 
-    // 2. Vision analysis
-    console.log('[Step 2] Querying Gemini Vision intelligence...');
+    // 2. Deep Vision & Spatial Analysis
+    console.log('[Step 2] Querying Gemini Vision for detailed spatial intelligence...');
     const analysis = await apiRequest('/api/predict', {
       screenshot_base64: screenshot,
       memoryProfile: memory?.profile || ''
     }).catch(() => null);
 
+    latestPredictionData = analysis;
     const screenDesc = analysis?.screenContext || analysis?.prediction || "Current Screen";
-    const highlightTarget = precomputedHighlight || analysis?.highlight;
+    const spatialDesc = analysis?.spatialContext || "";
+    const highlightTarget = precomputedHighlight || analysis?.highlight || latestPredictionData?.highlight;
     console.log(`[Step 3] Visual Context: "${screenDesc}"`);
+    console.log(`[Step 3b] Spatial Layout: "${spatialDesc}"`);
 
-    // 3. Compile message for Perxona Chatbot including Gemini visual context
-    const compiledUserPrompt = `[Screen Vision Intelligence: ${screenDesc}] ${userText}`;
+    // 3. Handle highlights & prediction pause based on intent
+    if (isNegative) {
+      console.log('[User Response: Negative] User declined. Pausing predictions for 90s.');
+      window.electronAPI?.hideHighlight?.();
+      window.electronAPI?.pausePredictions?.(90000);
+    } else if ((isAffirmative || /click|where|show|point/i.test(userText)) && highlightTarget) {
+      console.log('[User Response: Affirmative] Triggering desktop highlight overlay at:', highlightTarget);
+      window.electronAPI?.showHighlight?.(highlightTarget);
+      setTimeout(() => {
+        window.electronAPI?.hideHighlight?.();
+      }, 9000);
+    }
+
+    // 4. Compile message for Perxona Chatbot with full spatial intelligence
+    let intentGuidance = "";
+    if (isAffirmative) {
+      intentGuidance = `User confirmed assistance with "${userText}". Spatially guide them step-by-step to the highlighted target element (${highlightTarget?.label || 'target button'}). Give clear directions (e.g. "Look at the top-right button...").`;
+    } else if (isNegative) {
+      intentGuidance = `User declined assistance with "${userText}". Politely acknowledge in 1 brief, friendly sentence.`;
+    } else {
+      intentGuidance = `User asked: "${userText}". Provide clear, helpful, spatially-aware guidance for this screen.`;
+    }
+
+    const compiledUserPrompt = `[Spatial Screen Intelligence: ${screenDesc}. Spatial Layout: ${spatialDesc}. Target Element: ${JSON.stringify(highlightTarget || 'None')}] ${intentGuidance}`;
     history.push({ role: 'user', text: compiledUserPrompt });
 
-    // 4. Send to Perxona Chatbot
+    // 5. Send to Perxona Chatbot (Behavior AI)
     console.log('[Step 4] Requesting response from Perxona Chatbot...');
     const chatbotRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
       messages: toConnectMessages(history.slice(-MAX_HISTORY))
@@ -355,20 +366,8 @@ async function sendUserMessage(text, precomputedHighlight = null) {
     console.log(`[Step 5] Perxona Chatbot reply: "${replySpeech}"`);
 
     // Return response on webpage speech bubble
-    showBubble('NavGuide', replySpeech, 18000);
+    showBubble('NavGuide', replySpeech, 20000);
     history.push({ role: 'assistant', text: replySpeech });
-
-    // 5. Trigger highlight overlay if user asked for guidance / click target
-    const asksToPoint = /yes|show|point|where|click|help|button|link|tab|target/i.test(userText);
-    if (highlightTarget && asksToPoint) {
-      console.log('[Step 6] Triggering desktop highlight overlay at:', highlightTarget);
-      window.electronAPI?.showHighlight?.(highlightTarget);
-      setTimeout(() => {
-        window.electronAPI?.hideHighlight?.();
-      }, 8000);
-    } else {
-      window.electronAPI?.hideHighlight?.();
-    }
 
     // 6. Speak Perxona response (voice + lip-sync + motion markup)
     console.log('[Step 7] Triggering avatar speech...');
@@ -504,34 +503,14 @@ function setupUI() {
       sendUserMessage(text);
     }
   });
-  // Proactive background prediction display
+  // Proactive background prediction display (natural conversation)
   window.electronAPI?.onProactivePrediction?.(async (predData) => {
     console.log('[Proactive Prediction Received]', predData?.prediction);
-    const predictionText = predData?.prediction || "Need guidance with your current screen?";
-    const highlightTarget = predData?.highlight;
-
-    const actions = [
-      {
-        label: '💡 Help Me With This',
-        action: () => sendUserMessage('Please guide me step by step on what to do on this screen.')
-      },
-      {
-        label: '📍 Point Out Target',
-        action: () => sendUserMessage('Please point out where to click on this screen.', highlightTarget)
-      },
-      {
-        label: '❌ Not Now',
-        secondary: true,
-        action: () => {
-          window.electronAPI?.hideHighlight?.();
-          window.electronAPI?.pausePredictions?.(90000);
-          hideBubble();
-        }
-      }
-    ];
+    latestPredictionData = predData;
+    const predictionText = predData?.prediction || "I notice what you're working on. Would you like me to guide you or point out where to click?";
 
     console.log('[Proactive Prediction] Displaying in speech bubble...');
-    showBubble('NavGuide', predictionText, 25000, actions);
+    showBubble('NavGuide', predictionText, 25000);
   });
 }
 
