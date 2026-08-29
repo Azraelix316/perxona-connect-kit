@@ -68,10 +68,10 @@ function hideProactiveBubble() {
   window.electronAPI?.resolvePrediction?.('dismissed');
 }
 
-async function expandToFullAvatar(initialSpeech = null) {
+async function expandToFullAvatar(autoConfirm = true) {
   if (isExpanded) return;
   isExpanded = true;
-  console.log('[Mode] Expanding from Circle Orb to Full Avatar Stage');
+  console.log(`[Mode] Expanding from Circle Orb to Full Avatar Stage (autoConfirm: ${autoConfirm})`);
   
   hideProactiveBubble();
   document.body.classList.remove('mode-collapsed');
@@ -83,9 +83,14 @@ async function expandToFullAvatar(initialSpeech = null) {
     await initializePresenter();
   }
 
-  // Pass latest precomputed highlight so it immediately locks and renders after chat reply
-  const targetHighlight = latestPredictionData?.highlight;
-  await sendUserMessage("Yes", targetHighlight);
+  if (autoConfirm) {
+    // Clicking the speech bubble automatically says "Yes" to start guidance
+    const targetHighlight = latestPredictionData?.highlight;
+    await sendUserMessage("Yes", targetHighlight);
+  } else {
+    // Clicking the circle icon just opens the chatbot ready for interaction
+    showBubble('NavGuide', "Hi! I'm here. How can I help you?", 6000);
+  }
 }
 
 function collapseToCircleOrb() {
@@ -564,37 +569,38 @@ function startTaskTracking(target, initialScreenshot = null, workflowGoal = "") 
 
         // Dismiss previous highlight immediately
         window.electronAPI?.hideHighlight?.();
+        showToast('Verifying screen completion...', 3000);
+        console.log(`[Completion Check] Step "${completedTaskLabel}" completed. Capturing live screenshot to verify if "${currentGoal}" is actually finished...`);
 
-        // Check if there is a subsequent step in this multi-step flow
-        if (!res.isFlowFinished) {
-          showToast('Analyzing new screen...', 3000);
-          console.log(`[Multi-Step Progression] Step "${completedTaskLabel}" completed. Capturing fresh photo of the new screen state...`);
+        // Allow 450ms for page/UI state to settle
+        await new Promise((r) => setTimeout(r, 450));
+        if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
 
-          // Allow 400ms for destination page DOM/layout to render
-          await new Promise((r) => setTimeout(r, 400));
-          if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+        // 1. Take a fresh screenshot of the live screen
+        const freshScreen = await window.electronAPI?.captureScreen?.();
+        if (cycleSessionId !== currentWorkflowSessionId || !activeTask || !freshScreen) return;
 
-          // 1. Take a fresh screenshot of the brand new screen
-          const freshScreen = await window.electronAPI?.captureScreen?.();
-          if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+        // 2. Feed image to verify-completion to check if the goal is truly finished with visual evidence
+        const completionCheck = await apiRequest('/api/verify-completion', {
+          screenshot_base64: freshScreen,
+          workflowGoal: currentGoal,
+          lastStep: completedTaskLabel
+        }).catch(() => null);
 
-          // 2. Feed the new screenshot directly into vision engine with the active workflow goal
-          console.log(`[Multi-Step Vision] Feeding fresh screenshot to API for goal: "${currentGoal}"...`);
-          const nextAnalysis = await apiRequest('/api/predict', {
-            screenshot_base64: freshScreen,
-            currentWorkflowGoal: currentGoal,
-            userMessage: `User completed: "${completedTaskLabel}". Analyze the new screen to find the next action for workflow: "${currentGoal}".`
-          }).catch(() => null);
+        if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
 
-          if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+        console.log(`[Visual Completion Check] isActuallyFinished: ${completionCheck?.isActuallyFinished} | Evidence: "${completionCheck?.completionEvidence}"`);
 
-          const nextHighlight = nextAnalysis?.highlight || res.nextHighlight;
+        // IF NOT ACTUALLY FINISHED: Continue the workflow with the verified next step!
+        if (!completionCheck?.isActuallyFinished) {
+          const nextHighlight = completionCheck?.nextHighlight || res.nextHighlight;
+          const nextActionText = completionCheck?.remainingAction || res.nextStep || (nextHighlight?.label ? `Click ${nextHighlight.label}` : 'Continue');
 
           if (nextHighlight) {
-            console.log(`[Next Step Grounding] Publishing single locked highlight at:`, nextHighlight);
+            console.log(`[Next Step Grounding] Verified next action on screen: "${nextActionText}" at:`, nextHighlight);
             window.electronAPI?.showHighlight?.(nextHighlight);
             activeTask = {
-              label: nextHighlight.label || res.nextStep || 'Next Action',
+              label: nextHighlight.label || nextActionText,
               box_2d: nextHighlight.box_2d,
               workflowGoal: currentGoal,
               previousScreenshot: freshScreen,
@@ -603,7 +609,7 @@ function startTaskTracking(target, initialScreenshot = null, workflowGoal = "") 
               supportCount: 0
             };
 
-            const nextPrompt = `[Multi-Step Continuation towards "${currentGoal}": User completed "${completedTaskLabel}". New screen loaded. Next action: "${nextAnalysis?.prediction || res.nextStep || ''}" on "${nextHighlight.label}"] Spatially guide them to click the newly highlighted element in 1-2 clear, enthusiastic sentences without asking if they need help!`;
+            const nextPrompt = `[Multi-Step Continuation towards "${currentGoal}": User completed "${completedTaskLabel}". We inspected the live screen and found the task is not yet finished. Next required action: "${nextActionText}" on "${nextHighlight.label}"] Spatially guide them to click the newly highlighted element in 1-2 clear, enthusiastic sentences!`;
             history.push({ role: 'user', text: nextPrompt });
             const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
               messages: toConnectMessages(history.slice(-MAX_HISTORY))
@@ -611,7 +617,7 @@ function startTaskTracking(target, initialScreenshot = null, workflowGoal = "") 
 
             if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
 
-            const reply = chatRes?.reply_text || nextAnalysis?.prediction || res.nextStep || `Great! Now click ${nextHighlight.label}.`;
+            const reply = chatRes?.reply_text || nextActionText || `Great! Now click ${nextHighlight.label}.`;
             showBubble('NavGuide', reply, 20000);
             history.push({ role: 'assistant', text: reply });
             await speakWithAvatar(reply);
@@ -622,13 +628,13 @@ function startTaskTracking(target, initialScreenshot = null, workflowGoal = "") 
           }
         }
 
-        // Full workflow completed
+        // IF GENUINELY FINISHED WITH VISUAL EVIDENCE: Celebrate and conclude!
         showToast('Workflow completed!', 3000);
-        console.log(`[Task Verification] Full workflow completed on "${completedTaskLabel}". Dismissing highlight.`);
-        stopTaskTracking();
+        console.log(`[Task Verification] Verified with visual proof that "${currentGoal}" is completely finished! Evidence: "${completionCheck?.completionEvidence}".`);
+        stopTaskTracking(true);
 
         // Chime in with celebration text message and avatar speech
-        const confirmPrompt = `[Workflow Completed: User successfully finished the entire process for "${currentGoal}".] Congratulate them enthusiastically on finishing this workflow in 1-2 warm, friendly sentences!`;
+        const confirmPrompt = `[Workflow Completed: Visual proof verified that the user has completely achieved their goal for "${currentGoal}". Evidence: "${completionCheck?.completionEvidence || 'All steps completed'}"] Congratulate them enthusiastically on finishing this workflow in 1-2 warm, friendly sentences!`;
         history.push({ role: 'user', text: confirmPrompt });
         const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
           messages: toConnectMessages(history.slice(-MAX_HISTORY))
@@ -755,13 +761,14 @@ function setupSpeechRecognition() {
 // ── UI Setup ──────────────────────────────────────────────────────────────
 
 function setupUI() {
-  // Click on proactive prediction bubble or circle orb expands to full avatar companion
+  // Click on proactive prediction bubble expands AND automatically triggers "Yes"
   proactiveBubble?.addEventListener('click', () => {
-    expandToFullAvatar();
+    expandToFullAvatar(true);
   });
 
+  // Click on circle icon just opens the chatbot stage without triggering automatic guidance
   avatarOrb?.addEventListener('click', () => {
-    expandToFullAvatar();
+    expandToFullAvatar(false);
   });
 
   // Avatar click handler for instant prediction inside expanded stage

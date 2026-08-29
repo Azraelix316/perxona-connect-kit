@@ -1335,6 +1335,82 @@ Return ONLY a valid JSON object:
   }
 });
 
+// POST /api/verify-completion
+// Strictly inspects a fresh screenshot to verify with undeniable visual evidence if the workflow goal is truly complete
+app.post("/api/verify-completion", async (req, res) => {
+  const visionKey = process.env.GEMINI_API_KEY || process.env.VISION_API_KEY;
+  if (!visionKey) {
+    res.status(501).json({ error: "GEMINI_API_KEY not configured." });
+    return;
+  }
+  const { screenshot_base64, workflowGoal, lastStep } = req.body ?? {};
+  if (!screenshot_base64) {
+    res.status(400).json({ error: "'screenshot_base64' is required." });
+    return;
+  }
+
+  const effectiveGoal = workflowGoal || "Desktop Task";
+
+  const systemPrompt = `You are NavGuide's Task Completion Verification Vision Engine.
+Analyze the user's active desktop screen capture to determine if the overarching workflow goal: "${effectiveGoal}" has ACTUALLY been achieved, or if there is another step needed on this screen.
+The user just performed action: "${lastStep || 'previous step'}".
+
+Evaluate the image with strict scrutiny:
+1. "completionEvidence": Describe what visual evidence exists on screen.
+2. "isActuallyFinished": 
+   - Set to TRUE ONLY IF there is clear, undeniable evidence on screen that the overall goal "${effectiveGoal}" has been accomplished (e.g. download started/saved in browser tray, installation successful dialog, setting confirmed, file opened/exported, process completed).
+   - Set to FALSE if the user is still on an intermediate screen, website page, search page, form, or needs to click another button to actually finish.
+3. "remainingAction": If NOT actually finished, describe the next specific button/action to take on this screen in 1 sentence.
+4. "nextHighlight": If NOT finished, provide the exact tight 2D bounding box of the element to click:
+   {
+     "label": "Button/Link text",
+     "box_2d": [ymin, xmin, ymax, xmax] // 0-1000 integer scale: [top, left, bottom, right]
+   }
+   If actually finished, return null.
+
+Return ONLY a valid JSON object:
+{
+  "completionEvidence": "Description of visual proof",
+  "isActuallyFinished": false,
+  "remainingAction": "Next action description if not finished",
+  "nextHighlight": { "label": "Download button", "box_2d": [200, 400, 250, 600] }
+}`;
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `Verify if workflow "${effectiveGoal}" is actually finished based on this live screen capture.` },
+        {
+          type: "image_url",
+          image_url: { url: screenshot_base64 }
+        }
+      ]
+    }
+  ];
+
+  try {
+    const payload = await requestVisionCompletion(messages, { maxTokens: 450 });
+    const text = llmResponseText(payload);
+    const parsed = parseJsonFromLlm(text) ?? {
+      completionEvidence: "",
+      isActuallyFinished: false,
+      remainingAction: "",
+      nextHighlight: null
+    };
+    res.json(parsed);
+  } catch (err) {
+    console.error(`POST /api/verify-completion error:`, err);
+    res.status(502).json({
+      completionEvidence: "",
+      isActuallyFinished: false,
+      remainingAction: "",
+      nextHighlight: null
+    });
+  }
+});
+
 // POST /api/vision-chat
 // Full multimodal conversational response with speech, highlight coordinates, and emotion
 app.post("/api/vision-chat", async (req, res) => {
