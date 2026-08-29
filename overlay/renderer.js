@@ -130,12 +130,21 @@ async function initializePresenter() {
       errorEl.hidden = false;
     });
 
-    // Initialize with target
-    await presenter.initializeWithConnectKey(connect_key, {
-      avatarId: config.fixedTarget.avatarId,
-      sceneId: config.fixedTarget.sceneId,
-      voiceId: config.fixedTarget.voiceId
-    });
+    // Initialize without a scene for 100% transparent canvas (avatar only)
+    try {
+      await presenter.initializeWithConnectKey(connect_key, {
+        avatarId: config.fixedTarget.avatarId,
+        sceneId: null,
+        voiceId: config.fixedTarget.voiceId
+      });
+    } catch (sceneErr) {
+      console.warn('Transparent scene initialization fallback with default scene:', sceneErr);
+      await presenter.initializeWithConnectKey(connect_key, {
+        avatarId: config.fixedTarget.avatarId,
+        sceneId: config.fixedTarget.sceneId,
+        voiceId: config.fixedTarget.voiceId
+      });
+    }
 
   } catch (err) {
     console.error('Initialization error:', err);
@@ -158,10 +167,14 @@ async function unlockAudio() {
 
 // ── Proactive Click Summoning & Multimodal Conversation ───────────────────
 
+let isBusy = false;
+
 async function handleAvatarClick() {
-  await unlockAudio();
+  if (isBusy) return;
+  isBusy = true;
 
   try {
+    await unlockAudio();
     const predData = await window.electronAPI?.getLatestPrediction?.();
     const predictionText = predData?.prediction;
 
@@ -171,32 +184,44 @@ async function handleAvatarClick() {
 
       if (presenter && presenter.present) {
         presenter.setThinking?.(false);
-        await presenter.present(predictionText);
+        try {
+          await presenter.present(predictionText);
+        } catch (presErr) {
+          if (!String(presErr).includes('aborted')) {
+            console.warn('Present speech warning:', presErr);
+          }
+        }
       }
     } else {
-      // If no cached prediction, run a fresh conversation query
+      isBusy = false;
       await sendUserMessage("Can you see what I'm doing and guide me?");
+      return;
     }
   } catch (err) {
-    console.error('Avatar click error:', err);
-    showToast('Checking screen...');
+    if (!String(err).includes('aborted')) {
+      console.error('Avatar click error:', err);
+      showToast('Checking screen...');
+    }
+  } finally {
+    isBusy = false;
   }
 }
 
 async function sendUserMessage(text) {
-  if (!text || !text.trim()) return;
+  if (!text || !text.trim() || isBusy) return;
+  isBusy = true;
   const userText = text.trim();
 
-  await unlockAudio();
-  showBubble('You', userText, 4000);
-  history.push({ role: 'user', content: userText });
-
-  if (presenter) {
-    presenter.setThinking?.(true);
-  }
-  showToast('Analyzing screen...');
-
   try {
+    await unlockAudio();
+    showBubble('You', userText, 4000);
+    history.push({ role: 'user', content: userText });
+
+    if (presenter) {
+      presenter.setThinking?.(true);
+    }
+    showToast('Analyzing screen...');
+
     // 1. Capture fresh screenshot
     const screenshot = await window.electronAPI?.captureScreen?.();
     // 2. Fetch memory profile
@@ -222,9 +247,15 @@ async function sendUserMessage(text) {
 
     // Speak response
     if (presenter) {
-      const res = await presenter.present(replySpeech);
-      if (res && !res.success) {
-        console.warn('Present speech warning:', res);
+      try {
+        const res = await presenter.present(replySpeech);
+        if (res && !res.success) {
+          console.warn('Present speech warning:', res);
+        }
+      } catch (presErr) {
+        if (!String(presErr).includes('aborted')) {
+          console.warn('Present speech warning:', presErr);
+        }
       }
     }
 
@@ -246,8 +277,12 @@ async function sendUserMessage(text) {
 
   } catch (err) {
     if (presenter) presenter.setThinking?.(false);
-    console.error('Vision chat error:', err);
-    showBubble('NavGuide', `Sorry, I ran into an issue: ${err.message}`);
+    if (!String(err).includes('aborted')) {
+      console.error('Vision chat error:', err);
+      showBubble('NavGuide', `Sorry, I ran into an issue: ${err.message}`);
+    }
+  } finally {
+    isBusy = false;
   }
 }
 

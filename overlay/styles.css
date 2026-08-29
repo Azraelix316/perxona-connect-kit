@@ -27,45 +27,8 @@ html, body {
 }
 
 /* Interactive elements must not drag window */
-button, input, .speech-bubble, .input-bar, .window-controls {
+button, input, .speech-bubble, .input-bar {
   -webkit-app-region: no-drag;
-}
-
-/* Window Controls */
-.window-controls {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 6px;
-  z-index: 200;
-}
-
-.control-btn {
-  width: 22px;
-  height: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 50%;
-  background: rgba(14, 17, 22, 0.6);
-  backdrop-filter: blur(10px);
-  color: #94a1b2;
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.control-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-}
-
-#close-btn:hover {
-  background: rgba(255, 59, 48, 0.85);
-  border-color: rgba(255, 59, 48, 1);
-  color: white;
 }
 
 /* Speech Bubble Popover */
@@ -137,9 +100,6 @@ sv-presenter {
   height: 100%;
   display: block;
   background: transparent !important;
-  /* Radial mask so character floats cleanly without rectangular box */
-  -webkit-mask-image: radial-gradient(ellipse 65% 82% at 50% 45%, black 45%, transparent 95%);
-  mask-image: radial-gradient(ellipse 65% 82% at 50% 45%, black 45%, transparent 95%);
 }
 
 /* Loading & Status States */

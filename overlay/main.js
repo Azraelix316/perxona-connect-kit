@@ -189,6 +189,18 @@ function createWindows() {
   mainWindow.loadFile('index.html');
   mainWindow.setIgnoreMouseEvents(false);
 
+  // Force always on top across all workspaces and apps
+  mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+  mainWindow.on('blur', () => {
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  });
+
+  mainWindow.on('restore', () => {
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  });
+
   // 2. Fullscreen transparent highlight overlay window
   overlayWindow = new BrowserWindow({
     x: 0,

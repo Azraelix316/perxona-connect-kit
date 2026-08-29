@@ -694,6 +694,10 @@ app.get(
 // adding one, or an unset LLM_MODEL sends the wrong provider's model name.
 const LLM_DEFAULTS = {
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+  gemini: {
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-2.0-flash",
+  },
   anthropic: {
     baseUrl: "https://api.anthropic.com",
     model: "claude-sonnet-4-20250514",
@@ -765,9 +769,13 @@ function llmRequestConfig(messages, { maxTokens = 1024, responseFormat } = {}) {
 }
 
 async function requestLlmCompletion(messages, options = {}) {
-  if (LLM_PROVIDER !== "openai" && LLM_PROVIDER !== "anthropic") {
+  if (
+    LLM_PROVIDER !== "openai" &&
+    LLM_PROVIDER !== "anthropic" &&
+    LLM_PROVIDER !== "gemini"
+  ) {
     throw Object.assign(
-      new Error("LLM_PROVIDER must be either 'openai' or 'anthropic'."),
+      new Error("LLM_PROVIDER must be 'openai', 'gemini', or 'anthropic'."),
       { status: 500 },
     );
   }
