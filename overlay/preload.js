@@ -15,11 +15,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureScreen: () => ipcRenderer.invoke('capture-screen'),
   getLatestPrediction: () => ipcRenderer.invoke('get-latest-prediction'),
   setLatestPrediction: (pred) => ipcRenderer.invoke('set-latest-prediction', pred),
+  pausePredictions: (durationMs) => ipcRenderer.send('pause-predictions', durationMs),
+  resolvePrediction: (action) => ipcRenderer.send('resolve-prediction', action),
 
   // Memory bank
   getMemory: () => ipcRenderer.invoke('get-memory'),
   saveMemory: (data) => ipcRenderer.invoke('save-memory', data),
 
-  // Activity events
+  // Activity & prediction events
   onActiveStatus: (callback) => ipcRenderer.on('active-status', (_e, status) => callback(status)),
+  onProactivePrediction: (callback) => ipcRenderer.on('proactive-prediction', (_e, data) => callback(data)),
 });

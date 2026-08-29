@@ -49,10 +49,10 @@ async function apiRequest(path, body) {
   const url = path.startsWith('http') ? path : `${BACKEND_URL}${path}`;
   const options = body
     ? {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }
     : { method: 'GET' };
 
   const res = await fetch(url, options);
@@ -73,11 +73,33 @@ function showToast(message, duration = 2500) {
   }, duration);
 }
 
-function showBubble(role, text, autoHide = 8000) {
+const quickActionsEl = document.getElementById('quick-actions');
+
+function showBubble(role, text, autoHide = 8000, actions = []) {
   if (bubbleTimer) clearTimeout(bubbleTimer);
   bubbleRole.textContent = role;
   bubbleRole.style.color = role === 'You' ? '#94a1b2' : '#7c9cf5';
   bubbleText.textContent = text;
+
+  if (quickActionsEl) {
+    quickActionsEl.innerHTML = '';
+    if (actions && actions.length > 0) {
+      actions.forEach(({ label, action, secondary }) => {
+        const btn = document.createElement('button');
+        btn.className = `quick-btn ${secondary ? 'secondary' : ''}`;
+        btn.textContent = label;
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          action();
+        });
+        quickActionsEl.appendChild(btn);
+      });
+      quickActionsEl.hidden = false;
+    } else {
+      quickActionsEl.hidden = true;
+    }
+  }
+
   speechBubble.classList.add('visible');
 
   if (autoHide > 0) {
@@ -137,6 +159,9 @@ async function initializePresenter() {
       voiceId: config.fixedTarget.voiceId
     });
 
+    // Load motions for body animations
+    await loadAvatarMotions(config.fixedTarget.avatarId);
+
   } catch (err) {
     console.error('Initialization error:', err);
     loadingEl.hidden = true;
@@ -145,8 +170,30 @@ async function initializePresenter() {
   }
 }
 
+// Motions cache for animated body reactions
+let availableMotions = [];
+
+async function loadAvatarMotions(avatarId) {
+  try {
+    const data = await apiRequest(`/api/avatars/${avatarId}/motions`);
+    availableMotions = data?.items || [];
+    console.log('Loaded avatar motions:', availableMotions.map(m => m.name));
+  } catch (e) {
+    console.warn('Failed to load avatar motions:', e);
+  }
+}
+
+function getRandomTalkingMotion() {
+  const talking = availableMotions.filter(m => m.tags?.some(t => t.includes('talking')));
+  if (talking.length > 0) {
+    const idx = Math.floor(Math.random() * talking.length);
+    return talking[idx].motion_id;
+  }
+  return availableMotions[0]?.motion_id || null;
+}
+
 async function unlockAudio() {
-  if (!audioUnlocked && presenter) {
+  if (presenter) {
     try {
       await presenter.resumeAudioPlayback?.();
       audioUnlocked = true;
@@ -156,6 +203,39 @@ async function unlockAudio() {
   }
 }
 
+async function speakWithAvatar(text) {
+  if (!presenter || !text) return;
+  console.log(`[Step: Audio] Unlocking audio context... Current state: ${audioUnlocked ? 'unlocked' : 'locking'}`);
+  await unlockAudio();
+
+  try {
+    console.log(`[Step: Presenter Call] Invoking presenter.present("${text.slice(0, 60)}...")`);
+    const result = await presenter.present(text);
+    console.log(`[Step: Presenter Result] success=${result?.success}, code=${result?.code || 'OK'}, message=${result?.message || 'none'}`);
+
+    // Health check on 3D canvas
+    const rect = presenter.getBoundingClientRect();
+    console.log(`[Step: Canvas Health] Presenter DOM size: ${rect.width}x${rect.height}, isConnected: ${presenter.isConnected}`);
+
+    if (!result?.success) {
+      console.warn(`[Presenter Issue] code: ${result?.code}, details: ${result?.message}`);
+      if (result?.code === 'AUDIO_CONTEXT_UNAVAILABLE') {
+        console.log('[Step: Presenter Retry] Resuming audio playback and retrying present()...');
+        await presenter.resumeAudioPlayback?.();
+        const retryRes = await presenter.present(text);
+        console.log(`[Step: Presenter Retry Result] success=${retryRes?.success}, code=${retryRes?.code}`);
+      }
+    }
+  } catch (err) {
+    if (!String(err).toLowerCase().includes('abort')) {
+      console.error('[Step: Presenter Exception]', err);
+    }
+  }
+}
+
+const toConnectMessages = (turns) =>
+  turns.map(({ role, text }) => ({ role, parts: [{ type: "text", text }] }));
+
 // ── Proactive Click Summoning & Multimodal Conversation ───────────────────
 
 let isBusy = false;
@@ -163,34 +243,73 @@ let isBusy = false;
 async function handleAvatarClick() {
   if (isBusy) return;
   isBusy = true;
+  console.log('\n=== [Action: Avatar Clicked] ===');
 
   try {
     await unlockAudio();
-    const predData = await window.electronAPI?.getLatestPrediction?.();
-    const predictionText = predData?.prediction;
+    showToast('Observing screen...');
 
-    if (predictionText) {
-      showBubble('NavGuide', predictionText);
-      history.push({ role: 'assistant', content: predictionText });
+    // 1. Capture screen and analyze with Gemini Vision
+    console.log('[Step 1] Capturing desktop screen...');
+    const screenshot = await window.electronAPI?.captureScreen?.();
+    const memory = await window.electronAPI?.getMemory?.();
 
-      if (presenter && presenter.present) {
-        presenter.setThinking?.(false);
-        try {
-          await presenter.present(predictionText);
-        } catch (presErr) {
-          if (!String(presErr).includes('aborted')) {
-            console.warn('Present speech warning:', presErr);
-          }
+    console.log('[Step 2] Sending screen capture to Gemini 3.5 Flash Lite (/api/predict)...');
+    let analysis = await apiRequest('/api/predict', {
+      screenshot_base64: screenshot,
+      memoryProfile: memory?.profile || ''
+    }).catch(() => null);
+
+    const screenDesc = analysis?.screenContext || analysis?.prediction || "the user's current screen";
+    const highlightTarget = analysis?.highlight;
+    console.log(`[Step 3] Gemini Vision output: "${screenDesc}"`);
+
+    // 2. Compile prompt for Perxona Chatbot including Gemini's visual intelligence
+    const promptForPerxona = `[Visual Screen Context: ${screenDesc}. Prediction: ${analysis?.prediction || ''}] Greet the user in 1 concise sentence and offer specific guidance for this screen.`;
+    history.push({ role: 'user', text: promptForPerxona });
+
+    // 3. Request reply from Perxona Chatbot
+    console.log('[Step 4] Calling Perxona Chatbot API (/api/chatbots/:id/chat)...');
+    const chatbotRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
+      messages: toConnectMessages(history.slice(-MAX_HISTORY))
+    });
+
+    const replyText = chatbotRes?.reply_text || analysis?.prediction || "I'm watching your screen! Need help with anything here?";
+    console.log(`[Step 5] Perxona Chatbot reply: "${replyText}"`);
+    history.push({ role: 'assistant', text: replyText });
+
+    // 4. Present interactive quick buttons
+    const actions = [
+      {
+        label: '💡 Help Me With This',
+        action: () => sendUserMessage('Please guide me step by step on what to do on this screen.')
+      },
+      {
+        label: '📍 Point Out Target',
+        action: () => sendUserMessage('Please point out where to click on this screen.', highlightTarget)
+      },
+      {
+        label: '❌ Not Now',
+        secondary: true,
+        action: () => {
+          window.electronAPI?.hideHighlight?.();
+          window.electronAPI?.pausePredictions?.(90000);
+          hideBubble();
+          speakWithAvatar("Got it! I'll give you space and won't interrupt.");
         }
       }
-    } else {
-      isBusy = false;
-      await sendUserMessage("Can you see what I'm doing and guide me?");
-      return;
-    }
+    ];
+
+    console.log('[Step 6] Rendering speech bubble in UI...');
+    showBubble('NavGuide', replyText, 18000, actions);
+
+    // 5. Avatar speaks with official Perxona voice & lip-sync motions
+    console.log('[Step 7] Calling avatar speech synthesis...');
+    await speakWithAvatar(replyText);
+
   } catch (err) {
-    if (!String(err).includes('aborted')) {
-      console.error('Avatar click error:', err);
+    if (!String(err).toLowerCase().includes('abort')) {
+      console.error('[Avatar Click Error]', err);
       showToast('Checking screen...');
     }
   } finally {
@@ -198,62 +317,56 @@ async function handleAvatarClick() {
   }
 }
 
-async function sendUserMessage(text) {
+async function sendUserMessage(text, precomputedHighlight = null) {
   if (!text || !text.trim() || isBusy) return;
   isBusy = true;
   const userText = text.trim();
+  console.log(`\n=== [Action: User Message: "${userText}"] ===`);
 
   try {
+    window.electronAPI?.resolvePrediction?.('accepted');
     await unlockAudio();
     showBubble('You', userText, 4000);
-    history.push({ role: 'user', content: userText });
-
-    if (presenter) {
-      presenter.setThinking?.(true);
-    }
     showToast('Analyzing screen...');
 
-    // 1. Capture fresh screenshot
+    // 1. Capture screen
+    console.log('[Step 1] Capturing desktop frame...');
     const screenshot = await window.electronAPI?.captureScreen?.();
-    // 2. Fetch memory profile
     const memory = await window.electronAPI?.getMemory?.();
-    // 3. Fetch latest prediction context
-    const predData = await window.electronAPI?.getLatestPrediction?.();
 
-    // 4. Send to Vision Chat endpoint
-    const response = await apiRequest('/api/vision-chat', {
-      messages: history.slice(-MAX_HISTORY),
+    // 2. Vision analysis
+    console.log('[Step 2] Querying Gemini Vision intelligence...');
+    const analysis = await apiRequest('/api/predict', {
       screenshot_base64: screenshot,
-      prediction: predData?.prediction,
-      memoryProfile: memory?.profile
+      memoryProfile: memory?.profile || ''
+    }).catch(() => null);
+
+    const screenDesc = analysis?.screenContext || analysis?.prediction || "Current Screen";
+    const highlightTarget = precomputedHighlight || analysis?.highlight;
+    console.log(`[Step 3] Visual Context: "${screenDesc}"`);
+
+    // 3. Compile message for Perxona Chatbot including Gemini visual context
+    const compiledUserPrompt = `[Screen Vision Intelligence: ${screenDesc}] ${userText}`;
+    history.push({ role: 'user', text: compiledUserPrompt });
+
+    // 4. Send to Perxona Chatbot
+    console.log('[Step 4] Requesting response from Perxona Chatbot...');
+    const chatbotRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
+      messages: toConnectMessages(history.slice(-MAX_HISTORY))
     });
 
-    if (presenter) {
-      presenter.setThinking?.(false);
-    }
+    const replySpeech = chatbotRes?.reply_text || "I see your screen. Let me know what you'd like me to do!";
+    console.log(`[Step 5] Perxona Chatbot reply: "${replySpeech}"`);
 
-    const replySpeech = response.speech || "I see your screen. How can I help you proceed?";
-    showBubble('NavGuide', replySpeech);
-    history.push({ role: 'assistant', content: replySpeech });
+    // Return response on webpage speech bubble
+    showBubble('NavGuide', replySpeech, 18000);
+    history.push({ role: 'assistant', text: replySpeech });
 
-    // Speak response
-    if (presenter) {
-      try {
-        presenter.interruptPresentation?.();
-        const res = await presenter.present(replySpeech);
-        if (res && !res.success) {
-          console.warn('Present speech warning:', res);
-        }
-      } catch (presErr) {
-        if (!String(presErr).toLowerCase().includes('abort')) {
-          console.warn('Present speech warning:', presErr);
-        }
-      }
-    }
-
-    // Trigger visual highlight if target provided
-    if (response.highlight) {
-      window.electronAPI?.showHighlight?.(response.highlight);
+    // 5. Trigger highlight overlay if user asked for guidance / click target
+    const asksToPoint = /yes|show|point|where|click|help|button|link|tab|target/i.test(userText);
+    if (highlightTarget && asksToPoint) {
+      console.log('[Step 6] Triggering desktop highlight overlay at:', highlightTarget);
+      window.electronAPI?.showHighlight?.(highlightTarget);
       setTimeout(() => {
         window.electronAPI?.hideHighlight?.();
       }, 8000);
@@ -261,17 +374,20 @@ async function sendUserMessage(text) {
       window.electronAPI?.hideHighlight?.();
     }
 
-    // Memory compaction every 3 interactions
+    // 6. Speak Perxona response (voice + lip-sync + motion markup)
+    console.log('[Step 7] Triggering avatar speech...');
+    await speakWithAvatar(replySpeech);
+
+    // 7. Memory compaction
     interactionCount++;
     if (interactionCount % 3 === 0) {
       compressUserMemory(userText, replySpeech);
     }
 
   } catch (err) {
-    if (presenter) presenter.setThinking?.(false);
     const msg = String(err?.message || err);
     if (!msg.toLowerCase().includes('abort')) {
-      console.error('Vision chat error:', err);
+      console.error('[Vision Chat Error]', err);
       showBubble('NavGuide', `Sorry, I ran into an issue: ${err.message}`);
     }
   } finally {
@@ -337,8 +453,10 @@ function setupSpeechRecognition() {
   recognition.onerror = (event) => {
     isRecording = false;
     micBtn.classList.remove('listening');
-    if (event.error !== 'no-speech' && event.error !== 'aborted') {
-      showToast(`Voice error: ${event.error}`);
+    if (event.error === 'network') {
+      showToast('Voice offline: use quick buttons or type below', 3500);
+    } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
+      showToast(`Voice: ${event.error}`, 2500);
     }
   };
 
@@ -389,6 +507,35 @@ function setupUI() {
       textDrawer.classList.remove('visible');
       sendUserMessage(text);
     }
+  });
+  // Proactive background prediction display
+  window.electronAPI?.onProactivePrediction?.(async (predData) => {
+    console.log('[Proactive Prediction Received]', predData?.prediction);
+    const predictionText = predData?.prediction || "Need guidance with your current screen?";
+    const highlightTarget = predData?.highlight;
+
+    const actions = [
+      {
+        label: '💡 Help Me With This',
+        action: () => sendUserMessage('Please guide me step by step on what to do on this screen.')
+      },
+      {
+        label: '📍 Point Out Target',
+        action: () => sendUserMessage('Please point out where to click on this screen.', highlightTarget)
+      },
+      {
+        label: '❌ Not Now',
+        secondary: true,
+        action: () => {
+          window.electronAPI?.hideHighlight?.();
+          window.electronAPI?.pausePredictions?.(90000);
+          hideBubble();
+        }
+      }
+    ];
+
+    console.log('[Proactive Prediction] Displaying in speech bubble...');
+    showBubble('NavGuide', predictionText, 25000, actions);
   });
 }
 

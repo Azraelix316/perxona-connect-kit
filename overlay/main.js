@@ -2,6 +2,10 @@ const { app, BrowserWindow, ipcMain, screen, desktopCapturer } = require('electr
 const path = require('path');
 const fs = require('fs');
 
+// Allow audio to play without user gesture requirement in Electron
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
 let mainWindow = null;
 let overlayWindow = null;
 
@@ -75,6 +79,8 @@ async function captureScreenFrame(width = 1280, height = 720) {
 // ── Pure Local Pixel Color Change Detection (Zero API Tokens Used) ─────────
 
 let lastPredictionCallTime = 0;
+let predictionPausedUntil = 0;
+let isPredictionPendingResolution = false;
 const MIN_PREDICTION_COOLDOWN_MS = 10000; // Minimum 10 seconds between API prediction calls
 
 // Pure local pixel color diff check: compares RGB values
@@ -98,9 +104,11 @@ function calculatePixelColorDiff(newBuffer, oldBuffer) {
   return changedPixels / totalSamples;
 }
 
-// Proactive screen prediction runner — ONLY called when a large visual screen change occurs
+// Proactive screen prediction runner — ONLY called when a large visual screen change occurs AND previous is resolved
 async function checkAndRunPrediction() {
   if (isPredicting) return;
+  if (isPredictionPendingResolution) return; // Do NOT send another prediction until previous is accepted/denied
+  if (Date.now() < predictionPausedUntil) return; // User dismissed prediction, pause for period
 
   try {
     const frame = await captureScreenFrame(1280, 720);
@@ -143,7 +151,9 @@ async function checkAndRunPrediction() {
         ...data,
         timestamp: Date.now()
       };
-      console.log('[Gemini 3.5 Flash Lite] Prediction:', latestPrediction.prediction);
+      isPredictionPendingResolution = true; // Lock until user accepts or denies
+      console.log('[Gemini 3.5 Flash Lite] Prediction ready (locked until user accepts/denies):', latestPrediction.prediction);
+      mainWindow?.webContents.send('proactive-prediction', latestPrediction);
     }
   } catch (err) {
     // Backend may not be ready or LLM_API_KEY not configured
@@ -186,22 +196,28 @@ function createWindows() {
   mainWindow = new BrowserWindow({
     width: windowWidth,
     height: windowHeight,
-    x: screenWidth - windowWidth - 20,
-    y: screenHeight - windowHeight - 20,
-    transparent: true,
+    x: screenWidth - windowWidth - 24,
+    y: screenHeight - windowHeight - 24,
+    transparent: false,
+    backgroundColor: '#090c11',
     frame: false,
     alwaysOnTop: true,
-    hasShadow: false,
-    resizable: true,
+    hasShadow: true,
+    resizable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     }
   });
 
   mainWindow.loadFile('index.html');
   mainWindow.setIgnoreMouseEvents(false);
+
+  mainWindow.webContents.on('console-message', (_event, _level, message) => {
+    console.log(`[Renderer] ${message}`);
+  });
 
   // Force always on top across all workspaces and apps
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -215,7 +231,7 @@ function createWindows() {
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
   });
 
-  // 2. Fullscreen transparent highlight overlay window
+  // 2. Fullscreen transparent highlight overlay window (hidden by default to prevent DWM alpha occlusion)
   overlayWindow = new BrowserWindow({
     x: 0,
     y: 0,
@@ -223,6 +239,7 @@ function createWindows() {
     height: primaryDisplay.bounds.height,
     transparent: true,
     frame: false,
+    show: false,
     alwaysOnTop: true,
     hasShadow: false,
     focusable: false,
@@ -292,13 +309,34 @@ ipcMain.on('show-highlight', (_event, rect) => {
     height = Math.round(((rect.h_pct || 4) / 100) * screenH);
   }
 
+  // Show overlay window only when needed
+  overlayWindow.showInactive();
+  overlayWindow.setAlwaysOnTop(true, 'floating');
   overlayWindow.webContents.send('highlight', {
     rect: { x, y, width, height, label: rect.label }
   });
+
+  // Keep avatar on top
+  mainWindow?.setAlwaysOnTop(true, 'screen-saver', 999);
+  mainWindow?.moveTop();
 });
 
 ipcMain.on('hide-highlight', () => {
-  overlayWindow?.webContents.send('hide-highlight');
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('hide-highlight');
+    overlayWindow.hide();
+  }
+});
+
+ipcMain.on('pause-predictions', (_event, durationMs = 90000) => {
+  isPredictionPendingResolution = false;
+  predictionPausedUntil = Date.now() + (durationMs || 90000);
+  console.log(`[Predictions] Denied/Paused for ${Math.round((durationMs || 90000) / 1000)}s`);
+});
+
+ipcMain.on('resolve-prediction', (_event, action) => {
+  isPredictionPendingResolution = false;
+  console.log(`[Predictions] Prediction resolved (${action || 'accepted'}). Ready for next screen change.`);
 });
 
 // Screen capture for renderer

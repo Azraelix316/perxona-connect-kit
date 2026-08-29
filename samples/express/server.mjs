@@ -1151,19 +1151,22 @@ app.post("/api/predict", async (req, res) => {
     return;
   }
 
-  const systemPrompt = `You are NavGuide, an intelligent AI desktop companion.
-Analyze this screenshot of the user's screen.
-${memoryProfile ? `User Profile Context: ${memoryProfile}` : ""}
+  const systemPrompt = `You are NavGuide's vision intelligence engine.
+Analyze this screen capture of the user's desktop.
+${memoryProfile ? `User Profile: ${memoryProfile}` : ""}
 
-In 1-2 concise, natural sentences:
-1. Identify the application or website currently on screen.
-2. Predict what specific task the user is performing or might need help with.
+1. Identify the application, webpage, and current workflow.
+2. Formulate a short, natural question or guidance observation (e.g. "Looks like you're setting up billing webhooks in Stripe. Want me to show you where to click?").
+3. If a key clickable button or navigation element is visible, estimate its percentage coordinates (0 to 100%):
+   "highlight": { "x_pct": 82, "y_pct": 14, "w_pct": 8, "h_pct": 4 }
+   Otherwise set "highlight": null.
 
-Respond ONLY with a valid JSON object in this exact format:
+Return ONLY a valid JSON object in this exact format:
 {
-  "prediction": "Looks like you're configuring your billing webhook in Stripe settings. Need help finding the endpoint URL?",
+  "screenContext": "Stripe Dashboard on Webhooks settings page",
+  "prediction": "Looks like you're in Stripe Webhook Settings. Want me to point out where to click?",
   "activeApp": "Stripe Dashboard",
-  "confidence": "high"
+  "highlight": null
 }`;
 
   const messages = [
@@ -1171,7 +1174,7 @@ Respond ONLY with a valid JSON object in this exact format:
     {
       role: "user",
       content: [
-        { type: "text", text: "What am I doing on screen right now?" },
+        { type: "text", text: "Analyze what is on screen and where key elements are located." },
         {
           type: "image_url",
           image_url: { url: screenshot_base64 },
@@ -1187,9 +1190,10 @@ Respond ONLY with a valid JSON object in this exact format:
     });
     const text = llmResponseText(payload);
     const parsed = parseJsonFromLlm(text) ?? {
+      screenContext: text,
       prediction: text,
       activeApp: "Active Application",
-      confidence: "medium",
+      highlight: null,
     };
     res.json(parsed);
   } catch (err) {
@@ -1223,11 +1227,13 @@ ${prediction ? `Current Screen Context: ${prediction}` : ""}
 
 CRITICAL RULES:
 1. Speech must be 1-2 SHORT, natural sentences. No markdown, no bullet points, no code blocks, no robotic phrasing.
-2. Be spatially clear: explicitly state where buttons/menus are (e.g. "in the top right corner", "on the left sidebar", "near the bottom").
-3. If you are directing the user to click a specific UI element visible on screen, estimate its normalized percentage coordinates (0 to 100% of screen width and height):
-   "highlight": { "x_pct": 82, "y_pct": 14, "w_pct": 8, "h_pct": 4 }
-   If no specific button/area is being pointed out, set "highlight": null.
-4. Set "emotion" to one of: "encouraging", "thinking", "greeting", "neutral".
+2. If the user declined or said no/fine, be friendly (e.g. "Got it! Let me know if you need any guidance.") and set "highlight": null.
+3. If the user asked for help, clicked 'Yes', or asked where to click/go:
+   - State clearly where the target is (e.g. "Click the blue Add Endpoint button in the top right — I've highlighted it for you!").
+   - Provide accurate screen percentage coordinates:
+     "highlight": { "x_pct": 82, "y_pct": 14, "w_pct": 8, "h_pct": 4 }
+4. If no specific clickable target is needed, set "highlight": null.
+5. Set "emotion" to one of: "encouraging", "thinking", "greeting", "neutral".
 
 Return ONLY a valid JSON object:
 {

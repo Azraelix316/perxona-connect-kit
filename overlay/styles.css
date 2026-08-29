@@ -7,14 +7,14 @@
 html, body {
   width: 100%;
   height: 100%;
-  background: transparent !important;
+  background: #090c11;
   color: #e8edf2;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   overflow: hidden;
   user-select: none;
 }
 
-/* Draggable app container */
+/* Draggable app container — stable dark widget */
 .app-container {
   position: relative;
   width: 100%;
@@ -23,11 +23,13 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
+  background: #090c11;
+  overflow: hidden;
   -webkit-app-region: drag;
 }
 
 /* Interactive elements must not drag window */
-button, input, .speech-bubble, .input-bar {
+button, input, .speech-bubble, .input-bar, .quick-btn {
   -webkit-app-region: no-drag;
 }
 
@@ -104,24 +106,69 @@ button, input, .speech-bubble, .input-bar {
   word-break: break-word;
 }
 
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.quick-btn {
+  background: rgba(124, 156, 245, 0.15);
+  border: 1px solid rgba(124, 156, 245, 0.4);
+  border-radius: 12px;
+  color: #7c9cf5;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+  user-select: none;
+}
+
+.quick-btn:hover {
+  background: #7c9cf5;
+  color: #0b1020;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(124, 156, 245, 0.4);
+}
+
+.quick-btn.secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #94a1b2;
+}
+
+.quick-btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
 /* Avatar Container */
 .avatar-stage {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
-  height: 420px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  border-radius: 16px;
+  border-radius: 20px;
   overflow: hidden;
+  background: #090c11;
+  z-index: 10;
 }
 
 sv-presenter {
   width: 100%;
   height: 100%;
   display: block;
-  background: transparent !important;
 }
 
 /* Loading & Status States */
