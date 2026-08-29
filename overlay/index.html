@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Perxona Desktop Avatar</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Window Controls -->
+  <div class="window-controls">
+    <button id="minimize-btn" class="control-btn" title="Minimize">−</button>
+    <button id="close-btn" class="control-btn" title="Close">×</button>
+  </div>
+
+  <!-- Avatar Container -->
+  <div class="avatar-container">
+    <sv-presenter id="presenter"></sv-presenter>
+    <div id="loading" class="loading">Loading avatar...</div>
+    <div id="error" class="error" hidden></div>
+  </div>
+
+  <!-- Input Controls -->
+  <div class="input-container">
+    <!-- Text Input -->
+    <div class="text-input-group">
+      <input 
+        type="text" 
+        id="text-input" 
+        placeholder="Type or speak..."
+        autocomplete="off"
+      />
+      <button id="send-btn" class="icon-btn" title="Send">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Speech Controls -->
+    <div class="speech-controls">
+      <button id="mic-btn" class="mic-btn" title="Hold to speak">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-width="2"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <span id="listening-indicator" class="listening-indicator" hidden>Listening...</span>
+    </div>
+  </div>
+
+  <!-- Status Display -->
+  <div id="status" class="status"></div>
+
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>

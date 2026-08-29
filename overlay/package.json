@@ -1,0 +1,12 @@
+{
+  "name": "perxona-desktop-avatar",
+  "version": "1.0.0",
+  "description": "Transparent desktop avatar overlay assistant",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^28.0.0"
+  }
+}
