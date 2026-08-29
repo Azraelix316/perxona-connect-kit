@@ -72,38 +72,60 @@ async function captureScreenFrame(width = 1280, height = 720) {
   return null;
 }
 
-// Fast downsampled pixel difference check
-function hasSignificantScreenChange(newBuffer, oldBuffer) {
-  if (!oldBuffer || !newBuffer) return true;
-  if (newBuffer.length !== oldBuffer.length) return true;
+// ── Pure Local Pixel Color Change Detection (Zero API Tokens Used) ─────────
 
-  let diffCount = 0;
-  const sampleStep = 64; // Sample every 64th byte for speed
+let lastPredictionCallTime = 0;
+const MIN_PREDICTION_COOLDOWN_MS = 10000; // Minimum 10 seconds between API prediction calls
+
+// Pure local pixel color diff check: compares RGB values
+function calculatePixelColorDiff(newBuffer, oldBuffer) {
+  if (!oldBuffer || !newBuffer) return 1.0; // 100% change on first capture
+  if (newBuffer.length !== oldBuffer.length) return 1.0;
+
+  let changedPixels = 0;
+  const sampleStep = 16; // Sample every 4th pixel (each pixel is 4 bytes RGBA)
   const totalSamples = Math.floor(newBuffer.length / sampleStep);
 
   for (let i = 0; i < newBuffer.length; i += sampleStep) {
-    if (Math.abs(newBuffer[i] - oldBuffer[i]) > 30) {
-      diffCount++;
+    const rDiff = Math.abs(newBuffer[i] - oldBuffer[i]);
+    const gDiff = Math.abs(newBuffer[i + 1] - oldBuffer[i + 1]);
+    const bDiff = Math.abs(newBuffer[i + 2] - oldBuffer[i + 2]);
+    // Significant color difference per pixel (RGB delta > 60)
+    if (rDiff + gDiff + bDiff > 60) {
+      changedPixels++;
     }
   }
-  return (diffCount / totalSamples) > 0.12; // >12% difference considered significant
+  return changedPixels / totalSamples;
 }
 
-// Proactive screen prediction runner
-async function runBackgroundPrediction() {
+// Proactive screen prediction runner — ONLY called when a large visual screen change occurs
+async function checkAndRunPrediction() {
   if (isPredicting) return;
-  isPredicting = true;
 
   try {
     const frame = await captureScreenFrame(1280, 720);
     if (!frame) return;
 
-    const changed = hasSignificantScreenChange(frame.buffer, lastCapturedBuffer);
-    lastCapturedBuffer = frame.buffer;
+    const diffRatio = calculatePixelColorDiff(frame.buffer, lastCapturedBuffer);
 
-    if (!changed && latestPrediction.timestamp) {
-      return; // No major change, keep current prediction
+    // Only update stored buffer if there was some change
+    if (diffRatio > 0.05) {
+      lastCapturedBuffer = frame.buffer;
     }
+
+    // Require >25% large screen change AND cooldown passed
+    const now = Date.now();
+    const isLargeChange = diffRatio >= 0.25;
+    const cooldownPassed = (now - lastPredictionCallTime) >= MIN_PREDICTION_COOLDOWN_MS;
+
+    if (!isLargeChange || !cooldownPassed) {
+      // Screen didn't change enough, zero API tokens used!
+      return;
+    }
+
+    isPredicting = true;
+    lastPredictionCallTime = now;
+    console.log(`[Local Screen Diff] Large change detected (${(diffRatio * 100).toFixed(1)}% pixels changed). Calling Gemini 3.5 Flash Lite...`);
 
     const memory = getMemoryData();
     const res = await fetch('http://localhost:8083/api/predict', {
@@ -121,7 +143,7 @@ async function runBackgroundPrediction() {
         ...data,
         timestamp: Date.now()
       };
-      console.log('Updated screen prediction:', latestPrediction.prediction);
+      console.log('[Gemini 3.5 Flash Lite] Prediction:', latestPrediction.prediction);
     }
   } catch (err) {
     // Backend may not be ready or LLM_API_KEY not configured
@@ -131,7 +153,7 @@ async function runBackgroundPrediction() {
   }
 }
 
-// Activity monitor loop
+// Activity monitor loop (checks screen pixels every 4 seconds)
 function startActivityMonitor() {
   setInterval(async () => {
     try {
@@ -143,20 +165,12 @@ function startActivityMonitor() {
         lastActivityTime = Date.now();
       }
 
-      const isIdle = (Date.now() - lastActivityTime) > 25000; // >25s without movement
-      const now = Date.now();
-
-      // Active: check prediction every 6s
-      // Idle: back off to 35s
-      const interval = isIdle ? 35000 : 6000;
-      if (!latestPrediction.lastCheck || (now - latestPrediction.lastCheck) >= interval) {
-        latestPrediction.lastCheck = now;
-        await runBackgroundPrediction();
-      }
+      // Check pixel diff (local calculation only)
+      await checkAndRunPrediction();
     } catch (err) {
       console.error('Activity monitor tick error:', err);
     }
-  }, 3000);
+  }, 4000);
 }
 
 // ── Window Management ──────────────────────────────────────────────────────

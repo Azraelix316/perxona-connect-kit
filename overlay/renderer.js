@@ -130,21 +130,12 @@ async function initializePresenter() {
       errorEl.hidden = false;
     });
 
-    // Initialize without a scene for 100% transparent canvas (avatar only)
-    try {
-      await presenter.initializeWithConnectKey(connect_key, {
-        avatarId: config.fixedTarget.avatarId,
-        sceneId: null,
-        voiceId: config.fixedTarget.voiceId
-      });
-    } catch (sceneErr) {
-      console.warn('Transparent scene initialization fallback with default scene:', sceneErr);
-      await presenter.initializeWithConnectKey(connect_key, {
-        avatarId: config.fixedTarget.avatarId,
-        sceneId: config.fixedTarget.sceneId,
-        voiceId: config.fixedTarget.voiceId
-      });
-    }
+    // Initialize presenter with valid avatar, scene, and voice
+    await presenter.initializeWithConnectKey(connect_key, {
+      avatarId: config.fixedTarget.avatarId,
+      sceneId: config.fixedTarget.sceneId,
+      voiceId: config.fixedTarget.voiceId
+    });
 
   } catch (err) {
     console.error('Initialization error:', err);
@@ -248,12 +239,13 @@ async function sendUserMessage(text) {
     // Speak response
     if (presenter) {
       try {
+        presenter.interruptPresentation?.();
         const res = await presenter.present(replySpeech);
         if (res && !res.success) {
           console.warn('Present speech warning:', res);
         }
       } catch (presErr) {
-        if (!String(presErr).includes('aborted')) {
+        if (!String(presErr).toLowerCase().includes('abort')) {
           console.warn('Present speech warning:', presErr);
         }
       }
@@ -277,7 +269,8 @@ async function sendUserMessage(text) {
 
   } catch (err) {
     if (presenter) presenter.setThinking?.(false);
-    if (!String(err).includes('aborted')) {
+    const msg = String(err?.message || err);
+    if (!msg.toLowerCase().includes('abort')) {
       console.error('Vision chat error:', err);
       showBubble('NavGuide', `Sorry, I ran into an issue: ${err.message}`);
     }

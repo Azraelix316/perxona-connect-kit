@@ -696,7 +696,7 @@ const LLM_DEFAULTS = {
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
   gemini: {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    model: "gemini-2.0-flash",
+    model: "gemini-3.5-flash-lite",
   },
   anthropic: {
     baseUrl: "https://api.anthropic.com",
@@ -1182,7 +1182,7 @@ Respond ONLY with a valid JSON object in this exact format:
 
   try {
     const payload = await requestLlmCompletion(messages, {
-      maxTokens: 200,
+      maxTokens: 600,
       responseFormat: { type: "json_object" },
     });
     const text = llmResponseText(payload);
@@ -1270,7 +1270,7 @@ Return ONLY a valid JSON object:
 
   try {
     const payload = await requestLlmCompletion(formattedMessages, {
-      maxTokens: 400,
+      maxTokens: 800,
       responseFormat: { type: "json_object" },
     });
     const text = llmResponseText(payload);
@@ -1318,7 +1318,7 @@ ${Array.isArray(recentInteractions) ? recentInteractions.join("\n") : (recentInt
 
   try {
     const payload = await requestLlmCompletion(messages, {
-      maxTokens: 150,
+      maxTokens: 400,
       responseFormat: { type: "json_object" },
     });
     const text = llmResponseText(payload);
