@@ -1134,14 +1134,45 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// Dedicated screen vision completion handler (uses GEMINI_API_KEY strictly for screenshot parsing)
+async function requestVisionCompletion(messages, { maxTokens = 600 } = {}) {
+  const visionKey = process.env.GEMINI_API_KEY || process.env.VISION_API_KEY;
+  if (!visionKey) {
+    throw new Error("GEMINI_API_KEY not configured in .env for vision analysis.");
+  }
+  const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${visionKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Vision API error (${res.status}): ${errText}`);
+  }
+  return await res.json();
+}
+
 // ── NavGuide Vision & Memory Routes ────────────────────────────────────────
 
 // POST /api/predict
-// Fast lightweight screen analysis for proactive predictions
+// Fast lightweight screen analysis solely for screenshot coordinates and context
 app.post("/api/predict", async (req, res) => {
-  if (!process.env.LLM_API_KEY) {
+  const visionKey = process.env.GEMINI_API_KEY || process.env.VISION_API_KEY;
+  if (!visionKey) {
     res.status(501).json({
-      error: "LLM_API_KEY not configured. Set it in .env to enable vision predictions.",
+      error: "GEMINI_API_KEY not configured. Set it in .env to enable vision predictions.",
     });
     return;
   }
@@ -1151,12 +1182,12 @@ app.post("/api/predict", async (req, res) => {
     return;
   }
 
-  const systemPrompt = `You are NavGuide's vision intelligence engine.
-Analyze this screen capture of the user's desktop.
+  const systemPrompt = `You are NavGuide's screen parser.
+Analyze this screen capture of the user's desktop purely to extract context and clickable coordinates.
 ${memoryProfile ? `User Profile: ${memoryProfile}` : ""}
 
 1. Identify the application, webpage, and current workflow.
-2. Formulate a short, natural question or guidance observation (e.g. "Looks like you're setting up billing webhooks in Stripe. Want me to show you where to click?").
+2. Formulate a short 1-sentence screen summary.
 3. If a key clickable button or navigation element is visible, estimate its percentage coordinates (0 to 100%):
    "highlight": { "x_pct": 82, "y_pct": 14, "w_pct": 8, "h_pct": 4 }
    Otherwise set "highlight": null.
@@ -1164,7 +1195,7 @@ ${memoryProfile ? `User Profile: ${memoryProfile}` : ""}
 Return ONLY a valid JSON object in this exact format:
 {
   "screenContext": "Stripe Dashboard on Webhooks settings page",
-  "prediction": "Looks like you're in Stripe Webhook Settings. Want me to point out where to click?",
+  "prediction": "User is viewing Stripe Webhook Settings.",
   "activeApp": "Stripe Dashboard",
   "highlight": null
 }`;
@@ -1184,10 +1215,7 @@ Return ONLY a valid JSON object in this exact format:
   ];
 
   try {
-    const payload = await requestLlmCompletion(messages, {
-      maxTokens: 600,
-      responseFormat: { type: "json_object" },
-    });
+    const payload = await requestVisionCompletion(messages, { maxTokens: 600 });
     const text = llmResponseText(payload);
     const parsed = parseJsonFromLlm(text) ?? {
       screenContext: text,

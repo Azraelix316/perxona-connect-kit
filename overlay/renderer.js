@@ -211,11 +211,7 @@ async function speakWithAvatar(text) {
   try {
     console.log(`[Step: Presenter Call] Invoking presenter.present("${text.slice(0, 60)}...")`);
     const result = await presenter.present(text);
-    console.log(`[Step: Presenter Result] success=${result?.success}, code=${result?.code || 'OK'}, message=${result?.message || 'none'}`);
-
-    // Health check on 3D canvas
-    const rect = presenter.getBoundingClientRect();
-    console.log(`[Step: Canvas Health] Presenter DOM size: ${rect.width}x${rect.height}, isConnected: ${presenter.isConnected}`);
+    console.log(`[Step: Presenter Result] success=${result?.success}, code=${result?.code ?? 'OK'}, message=${result?.message || 'none'}`);
 
     if (!result?.success) {
       console.warn(`[Presenter Issue] code: ${result?.code}, details: ${result?.message}`);
