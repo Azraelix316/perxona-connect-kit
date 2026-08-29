@@ -1176,34 +1176,41 @@ app.post("/api/predict", async (req, res) => {
     });
     return;
   }
-  const { screenshot_base64, memoryProfile } = req.body ?? {};
+  const { screenshot_base64, memoryProfile, userMessage, currentWorkflowGoal } = req.body ?? {};
   if (!screenshot_base64) {
     res.status(400).json({ error: "'screenshot_base64' is required." });
     return;
   }
 
-  const systemPrompt = `You are a universal pixel-perfect screen OCR and visual UI element localizer for all desktop applications (creative software, browsers, productivity tools, spreadsheets, enterprise apps, media tools, etc.).
-Perform deep spatial visual grounding on this desktop screenshot.
+  const systemPrompt = `You are NavGuide's desktop spatial intelligence and user assistance engine.
+Analyze the user's active desktop screen capture.
 ${memoryProfile ? `User Profile: ${memoryProfile}` : ""}
+${userMessage ? `User's Latest Query/Text: "${userMessage}"` : ""}
+${currentWorkflowGoal ? `Previous Active Goal: "${currentWorkflowGoal}"` : ""}
 
-1. "screenContext": Specific description of active application, window title, open documents/tabs/views, and current workflow.
-2. "spatialContext": Spatial breakdown of major UI panels (top toolbar/menu, left tool strip/navigation, central workspace/document/content, right inspector/sidebar).
-3. "prediction": An observant 1-sentence proactive guidance question relevant to their active task.
-4. "activeApp": Foreground application name.
-5. "highlight": Exact 2D bounding box of the single most relevant button, tab, link, menu item, or input element that the user is likely to interact with next:
+Analyze the active application and screen state:
+1. "workflowGoal": A clear description of what the user is working on or trying to accomplish right now (incorporating their user text/query if provided).
+2. "isGoalSwitched": true if the user's query or screen demonstrates a switch away from the previous active goal "${currentWorkflowGoal || 'none'}". Otherwise false.
+3. "screenContext": Brief description of the active application, window title, and visible content.
+4. "spatialContext": Spatial layout description of the interface.
+5. "prediction": Exactly ONE short, natural proactive guidance question proposing help with their primary goal (1 sentence, max 12 words). If on blank desktop with no open applications, set to null.
+6. "activeApp": Foreground application name.
+7. "highlight": The exact 2D bounding box hugging the primary action target, link, button, or search result tightly:
    {
-     "label": "exact text on target element",
-     "box_2d": [ymin, xmin, ymax, xmax]  // Exact integer bounding box on 0-1000 scale: [top, left, bottom, right]
+     "label": "Button/Link text",
+     "box_2d": [ymin, xmin, ymax, xmax]  // Exact integer bounding box on 0-1000 scale: [top, left, bottom, right] where (0,0) is top-left corner of the image and (1000,1000) is bottom-right corner. Hug the target element boundaries precisely.
    }
-   If no specific actionable element is relevant, set "highlight": null.
+   If no specific actionable element exists, set null.
 
-Return ONLY a valid JSON object in this exact schema:
+Return ONLY a valid JSON object:
 {
-  "screenContext": "Detailed description of application and active task",
-  "spatialContext": "Detailed spatial layout of windows, panels, and UI zones",
-  "prediction": "Natural, observant question or guidance offer",
+  "workflowGoal": "Description of current goal",
+  "isGoalSwitched": false,
+  "screenContext": "Brief description of application and content",
+  "spatialContext": "Brief spatial layout description",
+  "prediction": "Single focused guidance question, or null if on empty desktop",
   "activeApp": "Application Name",
-  "highlight": { "label": "Save Changes", "box_2d": [120, 450, 155, 550] }
+  "highlight": { "label": "Target Element Label", "box_2d": [120, 450, 155, 550] }
 }`;
 
   const messages = [
@@ -1211,7 +1218,7 @@ Return ONLY a valid JSON object in this exact schema:
     {
       role: "user",
       content: [
-        { type: "text", text: "Perform pixel-perfect visual OCR and UI grounding on this desktop screenshot. Find the exact [ymin, xmin, ymax, xmax] coordinates (0-1000 integer scale) of the target element." },
+        { type: "text", text: "Analyze the user's screen and user message. Identify their active workflow goal, check if the goal changed, and return the primary target element." },
         {
           type: "image_url",
           image_url: { url: screenshot_base64 },
@@ -1224,9 +1231,11 @@ Return ONLY a valid JSON object in this exact schema:
     const payload = await requestVisionCompletion(messages, { maxTokens: 900 });
     const text = llmResponseText(payload);
     const parsed = parseJsonFromLlm(text) ?? {
+      workflowGoal: "Desktop Task",
+      isGoalSwitched: false,
       screenContext: text,
       spatialContext: "",
-      prediction: text,
+      prediction: null,
       activeApp: "Active Application",
       highlight: null,
     };
@@ -1240,38 +1249,40 @@ Return ONLY a valid JSON object in this exact schema:
 });
 
 // POST /api/verify-task
-// Compares previous screen state vs current screen state to detect visual difference, task completion, and progressive support
+// Compares previous screen state vs current screen state to detect visual difference, task completion, and multi-step progression
 app.post("/api/verify-task", async (req, res) => {
   const visionKey = process.env.GEMINI_API_KEY || process.env.VISION_API_KEY;
   if (!visionKey) {
     res.status(501).json({ error: "GEMINI_API_KEY not configured." });
     return;
   }
-  const { screenshot_base64, previous_screenshot_base64, activeTask, elapsedSeconds, supportCount = 0 } = req.body ?? {};
+  const { screenshot_base64, previous_screenshot_base64, activeTask, workflowGoal, elapsedSeconds, supportCount = 0 } = req.body ?? {};
   if (!screenshot_base64 || !activeTask) {
     res.status(400).json({ error: "'screenshot_base64' and 'activeTask' are required." });
     return;
   }
 
-  const systemPrompt = `You are NavGuide's real-time Visual Task Difference & Continuous Desktop Support Engine for all software interfaces.
-The user is working on target element: "${activeTask.label || 'target UI element'}".
-Elapsed time: ${elapsedSeconds || 0} seconds.
+  const systemPrompt = `You are NavGuide's continuous Multi-Step Process Tracking and Visual Support Engine.
+The user is progressing through a multi-step workflow: "${workflowGoal || activeTask.workflowGoal || activeTask.label || 'Workflow'}".
+Previous target element they interacted with: "${activeTask.label || 'target UI element'}".
+Elapsed time on current step: ${elapsedSeconds || 0} seconds.
 Assistance tier: Attempt #${supportCount + 1}.
 
 Compare Image 1 (previous screen state) and Image 2 (current screen state):
-1. "visualDiff": Describe what visually changed between the two states (e.g. newly opened menus, cursor position, active selection, changed values, dialog boxes, or if screen remains identical).
-2. "isCompleted": true if the target action was performed (e.g. target was clicked/toggled, target view/dialog opened, selection changed, page/canvas updated, or form submitted). Otherwise false.
+1. "visualDiff": Describe what visually changed between the two states (e.g. newly loaded web page, dialog opened, tab switched, progress updated, or screen identical).
+2. "isCompleted": true if the previous target was clicked/performed (e.g. link clicked, new page loaded, modal opened, setting toggled). Otherwise false.
 3. "isStuck": true if ${elapsedSeconds || 0} >= 10 and "isCompleted" is false.
-4. "supportAdvice": Provide progressive, context-aware coaching tailored to the detected visual difference and Attempt #${supportCount + 1}:
-   - Attempt 1: Specific spatial landmark and visual appearance (e.g. "Look for the button near the top toolbar", "It's on the left navigation panel").
-   - Attempt 2: Direct interaction tip, shortcut, or menu path appropriate for this specific application.
-   - Attempt 3: Alternative way to achieve the goal in this software interface.
-   - Attempt 4+: Clear, step-by-step guidance referencing visible surrounding UI elements.
-   If completed or not stuck, return "".
-5. "nextStep": If completed, brief note on what the user can do next.
+4. "supportAdvice": If stuck, provide a supportive landmark or shortcut hint. If not stuck, return "".
+6. "nextHighlight": If there is a subsequent action target on Image 2, return:
+   {
+     "label": "Button/Link text",
+     "box_2d": [ymin, xmin, ymax, xmax]  // Exact integer bounding box on 0-1000 scale: [top, left, bottom, right] on Image 2
+   }
+   If no further steps or the overall task is finished, return null.
+7. "isFlowFinished": true if the entire multi-step goal is complete (e.g. software download has started / file downloaded), false if more steps remain.
 
-Universal Software Rule:
-Analyze ANY desktop software (design tools, web browsers, spreadsheets, office apps, creative suites, media tools, system utilities, etc.) dynamically based strictly on visible UI elements without assuming any specific domain.
+Universal Rule:
+Track the workflow continuously across page navigations and window changes without resetting or losing context.
 
 Return ONLY a valid JSON object:
 {
@@ -1279,11 +1290,13 @@ Return ONLY a valid JSON object:
   "isCompleted": false,
   "isStuck": false,
   "supportAdvice": "",
-  "nextStep": ""
+  "nextStep": "",
+  "nextHighlight": { "label": "Download Button", "box_2d": [220, 410, 270, 590] },
+  "isFlowFinished": false
 }`;
 
   const userContent = [
-    { type: "text", text: `Compare the previous desktop state with the current desktop state to check progress on target: "${activeTask.label}".` }
+    { type: "text", text: `Compare the previous desktop state with the current desktop state to check progress on workflow: "${workflowGoal || activeTask.label}".` }
   ];
 
   if (previous_screenshot_base64) {
@@ -1312,9 +1325,9 @@ Return ONLY a valid JSON object:
   ];
 
   try {
-    const payload = await requestVisionCompletion(messages, { maxTokens: 450 });
+    const payload = await requestVisionCompletion(messages, { maxTokens: 550 });
     const text = llmResponseText(payload);
-    const parsed = parseJsonFromLlm(text) ?? { visualDiff: "", isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "" };
+    const parsed = parseJsonFromLlm(text) ?? { visualDiff: "", isCompleted: false, isStuck: false, supportAdvice: "", nextStep: "", nextHighlight: null, isFlowFinished: false };
     res.json(parsed);
   } catch (err) {
     console.error(`POST /api/verify-task error:`, err);

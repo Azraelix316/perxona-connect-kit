@@ -21,6 +21,7 @@ let lastCursorPos = { x: 0, y: 0 };
 let lastActivityTime = Date.now();
 let lastCapturedBuffer = null;
 let isPredicting = false;
+let isWindowExpanded = false;
 
 const MEMORY_FILE_PATH = path.join(__dirname, 'data', 'memory.json');
 
@@ -111,26 +112,17 @@ function calculatePixelColorDiff(newBuffer, oldBuffer) {
   return changedPixels / totalSamples;
 }
 
-// Proactive screen prediction runner — ONLY called when a large visual screen change occurs AND previous is resolved
+// Proactive screen prediction runner — keeps updating predictions in circle mode until user expands
 async function checkAndRunPrediction() {
   if (isPredicting) return;
-  if (isPredictionPendingResolution) return; // Do NOT send another prediction until previous is accepted/denied
+  if (isWindowExpanded) return; // Never trigger random background predictions during an active avatar session!
   if (Date.now() < predictionPausedUntil) return; // User dismissed prediction, pause for period
 
   try {
-    const frame = await captureScreenFrame(1280, 720);
+    const frame = await captureScreenFrame();
     if (!frame) return;
 
     const diffRatio = calculatePixelColorDiff(frame.buffer, lastCapturedBuffer);
-
-    // Auto-dismiss highlight on large visual screen change (>18% screen change)
-    if (diffRatio >= 0.18) {
-      if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
-        console.log(`[Auto-Dismiss Highlight] Screen changed by ${(diffRatio * 100).toFixed(1)}% -> auto-dismissing highlight.`);
-        overlayWindow.webContents.send('hide-highlight');
-        overlayWindow.hide();
-      }
-    }
 
     // Only update stored buffer if there was some change
     if (diffRatio > 0.05) {
@@ -163,13 +155,19 @@ async function checkAndRunPrediction() {
 
     if (res.ok) {
       const data = await res.json();
-      latestPrediction = {
-        ...data,
-        timestamp: Date.now()
-      };
-      isPredictionPendingResolution = true; // Lock until user accepts or denies
-      console.log('[Gemini 3.5 Flash Lite] Prediction ready (locked until user accepts/denies):', latestPrediction.prediction);
-      mainWindow?.webContents.send('proactive-prediction', latestPrediction);
+      if (data?.prediction && data.prediction !== 'null' && data.hasMeaningfulTask !== false) {
+        latestPrediction = {
+          ...data,
+          timestamp: Date.now()
+        };
+        if (isWindowExpanded) {
+          isPredictionPendingResolution = true; // Lock only if in expanded view
+        }
+        console.log('[Gemini 3.5 Flash Lite] Proactive prediction:', latestPrediction.prediction);
+        mainWindow?.webContents.send('proactive-prediction', latestPrediction);
+      } else {
+        console.log('[Gemini 3.5 Flash Lite] Screen is idle/trivial. Skipping prediction.');
+      }
     }
   } catch (err) {
     // Backend may not be ready or LLM_API_KEY not configured
@@ -183,12 +181,23 @@ async function checkAndRunPrediction() {
 function startActivityMonitor() {
   setInterval(async () => {
     try {
-      const currentPos = screen.getCursorScreenPoint();
-      const mouseMoved = Math.abs(currentPos.x - lastCursorPos.x) > 5 || Math.abs(currentPos.y - lastCursorPos.y) > 5;
-      lastCursorPos = currentPos;
+      // Check mouse activity
+      const currentMousePos = screen.getCursorScreenPoint();
+      const mouseMoved = currentMousePos.x !== lastCursorPos.x || currentMousePos.y !== lastCursorPos.y;
+      lastCursorPos = currentMousePos;
 
       if (mouseMoved) {
         lastActivityTime = Date.now();
+      }
+
+      // Auto-dismiss active highlight after 25s timeout
+      if (currentHighlight && (Date.now() - currentHighlight.displayedAt > 25000)) {
+        console.log('[Highlight Auto-Timeout] 25s elapsed -> auto-dismissing highlight.');
+        currentHighlight = null;
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          overlayWindow.webContents.send('hide-highlight');
+          overlayWindow.hide();
+        }
       }
 
       // Check pixel diff (local calculation only)
@@ -205,20 +214,20 @@ function createWindows() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
 
-  // 1. Avatar companion window (bottom-right)
-  const windowWidth = 360;
-  const windowHeight = 520;
+  // 1. Avatar companion window (Starts in Collapsed Circle Mode bottom-right)
+  const windowWidth = 380;
+  const windowHeight = 260;
 
   mainWindow = new BrowserWindow({
     width: windowWidth,
     height: windowHeight,
-    x: screenWidth - windowWidth - 24,
-    y: screenHeight - windowHeight - 24,
-    transparent: false,
-    backgroundColor: '#090c11',
+    x: screenWidth - windowWidth - 16,
+    y: screenHeight - windowHeight - 16,
+    transparent: true,
+    backgroundColor: '#00000000',
     frame: false,
     alwaysOnTop: true,
-    hasShadow: true,
+    hasShadow: false,
     resizable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -305,6 +314,35 @@ ipcMain.on('close-window', () => {
   mainWindow?.close();
 });
 
+ipcMain.on('set-window-mode', (_event, mode) => {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+
+  if (mode === 'expanded') {
+    isWindowExpanded = true;
+    const w = 360;
+    const h = 540;
+    mainWindow?.setBounds({
+      x: screenWidth - w - 24,
+      y: screenHeight - h - 24,
+      width: w,
+      height: h
+    });
+  } else {
+    // Collapsed circle mode
+    isWindowExpanded = false;
+    isPredictionPendingResolution = false;
+    const w = 380;
+    const h = 260;
+    mainWindow?.setBounds({
+      x: screenWidth - w - 16,
+      y: screenHeight - h - 16,
+      width: w,
+      height: h
+    });
+  }
+});
+
 ipcMain.on('set-draggable', (_event, draggable) => {
   mainWindow?.setIgnoreMouseEvents(!draggable, { forward: true });
 });
@@ -333,6 +371,62 @@ function normalizeCoordinate(val, maxScreenDimension, fallback = 0) {
   }
 }
 
+// Universal bounding box extractor & coordinate converter
+function extractBoundingBox(rect, screenW, screenH) {
+  if (!rect) return null;
+
+  let box = null;
+  let label = rect.label || 'Target';
+
+  // 1. Direct array or nested box properties
+  if (Array.isArray(rect) && rect.length === 4) {
+    box = rect;
+  } else if (Array.isArray(rect.box_2d) && rect.box_2d.length === 4) {
+    box = rect.box_2d;
+  } else if (Array.isArray(rect.box) && rect.box.length === 4) {
+    box = rect.box;
+  } else if (Array.isArray(rect.box2d) && rect.box2d.length === 4) {
+    box = rect.box2d;
+  } else if (Array.isArray(rect.coordinates) && rect.coordinates.length === 4) {
+    box = rect.coordinates;
+  } else if (Array.isArray(rect.bounding_box) && rect.bounding_box.length === 4) {
+    box = rect.bounding_box;
+  } else if (rect.ymin !== undefined && rect.xmin !== undefined && rect.ymax !== undefined && rect.xmax !== undefined) {
+    box = [rect.ymin, rect.xmin, rect.ymax, rect.xmax];
+  }
+
+  if (box) {
+    const [ymin, xmin, ymax, xmax] = box.map(Number);
+    // Auto-detect 0-1 normalized scale vs 0-1000 scale vs 0-10000 scale
+    const maxVal = Math.max(ymin, xmin, ymax, xmax);
+    const scale = maxVal <= 1.0 ? 1.0 : (maxVal <= 100.0 ? 100.0 : 1000.0);
+
+    const x = Math.round((xmin / scale) * screenW);
+    const y = Math.round((ymin / scale) * screenH);
+    const width = Math.max(Math.round(((xmax - xmin) / scale) * screenW), 60);
+    const height = Math.max(Math.round(((ymax - ymin) / scale) * screenH), 28);
+    return { x, y, width, height, label };
+  }
+
+  // 2. Direct x, y, width, height
+  const rawX = rect.x !== undefined ? rect.x : rect.x_pct;
+  const rawY = rect.y !== undefined ? rect.y : rect.y_pct;
+  const rawW = rect.width !== undefined ? rect.width : (rect.w_pct !== undefined ? rect.w_pct : null);
+  const rawH = rect.height !== undefined ? rect.height : (rect.h_pct !== undefined ? rect.h_pct : null);
+
+  if (rawX !== undefined && rawY !== undefined) {
+    const x = normalizeCoordinate(rawX, screenW, 0);
+    const y = normalizeCoordinate(rawY, screenH, 0);
+    const width = Math.max(normalizeCoordinate(rawW, screenW, 120), 60);
+    const height = Math.max(normalizeCoordinate(rawH, screenH, 36), 28);
+    return { x, y, width, height, label };
+  }
+
+  return null;
+}
+
+let currentHighlight = null;
+
 // Highlighting
 ipcMain.on('show-highlight', (_event, rect) => {
   if (!overlayWindow || !rect) return;
@@ -340,36 +434,25 @@ ipcMain.on('show-highlight', (_event, rect) => {
   const screenW = primaryDisplay.bounds.width;
   const screenH = primaryDisplay.bounds.height;
 
-  let x = 0, y = 0, width = 120, height = 36;
-
-  // 1. Native Gemini 2D visual grounding box: [ymin, xmin, ymax, xmax] on 0-1000 scale
-  if (Array.isArray(rect.box_2d) && rect.box_2d.length === 4) {
-    const [ymin, xmin, ymax, xmax] = rect.box_2d.map(Number);
-    x = Math.round((xmin / 1000) * screenW);
-    y = Math.round((ymin / 1000) * screenH);
-    width = Math.round(((xmax - xmin) / 1000) * screenW);
-    height = Math.round(((ymax - ymin) / 1000) * screenH);
-  } else {
-    const rawX = rect.x !== undefined ? rect.x : rect.x_pct;
-    const rawY = rect.y !== undefined ? rect.y : rect.y_pct;
-    const rawW = rect.width !== undefined ? rect.width : (rect.w_pct !== undefined ? rect.w_pct : 8);
-    const rawH = rect.height !== undefined ? rect.height : (rect.h_pct !== undefined ? rect.h_pct : 4);
-
-    x = normalizeCoordinate(rawX, screenW, 0);
-    y = normalizeCoordinate(rawY, screenH, 0);
-    width = Math.max(normalizeCoordinate(rawW, screenW, 120), 60);
-    height = Math.max(normalizeCoordinate(rawH, screenH, 36), 24);
+  const parsed = extractBoundingBox(rect, screenW, screenH);
+  if (!parsed) {
+    console.warn('[Highlight Warning] Received unparseable highlight payload:', rect);
+    return;
   }
 
-  // Add generous breathing buffer around target (14px horizontally, 8px vertically)
-  const BUFFER_X = 14;
-  const BUFFER_Y = 8;
+  let { x, y, width, height, label } = parsed;
+
+  // Snug precision buffer (4px horizontal, 3px vertical)
+  const BUFFER_X = 4;
+  const BUFFER_Y = 3;
   x = Math.max(0, x - BUFFER_X);
   y = Math.max(0, y - BUFFER_Y);
   width = width + (BUFFER_X * 2);
   height = height + (BUFFER_Y * 2);
 
-  console.log(`[Pixel-Perfect Highlight] Mapped to (${x}px, ${y}px, ${width}x${height}px) on ${screenW}x${screenH} viewport | Label: "${rect.label || 'Target'}"`);
+  currentHighlight = { x, y, width, height, displayedAt: Date.now() };
+
+  console.log(`[Pixel-Perfect Highlight] Mapped to (${x}px, ${y}px, ${width}x${height}px) on ${screenW}x${screenH} viewport | Label: "${label}"`);
 
   // Ensure overlayWindow matches current primary display geometry
   overlayWindow.setBounds({
@@ -383,7 +466,7 @@ ipcMain.on('show-highlight', (_event, rect) => {
   overlayWindow.showInactive();
   overlayWindow.setAlwaysOnTop(true, 'screen-saver', 999);
   overlayWindow.webContents.send('highlight', {
-    rect: { x, y, width, height, label: rect.label }
+    rect: { x, y, width, height, label }
   });
 
   // Keep avatar above the overlay
@@ -392,6 +475,7 @@ ipcMain.on('show-highlight', (_event, rect) => {
 });
 
 ipcMain.on('hide-highlight', () => {
+  currentHighlight = null;
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('hide-highlight');
     overlayWindow.hide();

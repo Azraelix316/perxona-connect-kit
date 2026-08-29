@@ -25,4 +25,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Activity & prediction events
   onActiveStatus: (callback) => ipcRenderer.on('active-status', (_e, status) => callback(status)),
   onProactivePrediction: (callback) => ipcRenderer.on('proactive-prediction', (_e, data) => callback(data)),
+  setWindowMode: (mode) => ipcRenderer.send('set-window-mode', mode),
 });

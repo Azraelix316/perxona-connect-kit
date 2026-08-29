@@ -35,12 +35,78 @@ const textDrawer = document.getElementById('text-drawer');
 const textInput = document.getElementById('text-input');
 const sendBtn = document.getElementById('send-btn');
 
+// Collapsed & Expanded Mode DOM Elements
+const proactiveBubble = document.getElementById('proactive-bubble');
+const proactiveText = document.getElementById('proactive-text');
+const avatarOrb = document.getElementById('avatar-orb');
+const collapseBtn = document.getElementById('collapse-btn');
+const closeBtn = document.getElementById('close-btn');
+
+let isExpanded = false;
+let proactiveBubbleTimeout = null;
+
+function showProactiveBubble(text, durationMs = 15000) {
+  if (!proactiveBubble || !proactiveText) return;
+  proactiveText.textContent = text;
+  proactiveBubble.classList.add('visible');
+
+  if (proactiveBubbleTimeout) clearTimeout(proactiveBubbleTimeout);
+  proactiveBubbleTimeout = setTimeout(() => {
+    hideProactiveBubble();
+  }, durationMs);
+}
+
+function hideProactiveBubble() {
+  if (proactiveBubble) {
+    proactiveBubble.classList.remove('visible');
+  }
+  if (proactiveBubbleTimeout) {
+    clearTimeout(proactiveBubbleTimeout);
+    proactiveBubbleTimeout = null;
+  }
+  // Re-enable background prediction evaluation in main.js
+  window.electronAPI?.resolvePrediction?.('dismissed');
+}
+
+async function expandToFullAvatar(initialSpeech = null) {
+  if (isExpanded) return;
+  isExpanded = true;
+  console.log('[Mode] Expanding from Circle Orb to Full Avatar Stage');
+  
+  hideProactiveBubble();
+  document.body.classList.remove('mode-collapsed');
+  document.body.classList.add('mode-expanded');
+  window.electronAPI?.setWindowMode?.('expanded');
+
+  // Initialize presenter if not yet loaded
+  if (!presenter) {
+    await initializePresenter();
+  }
+
+  // Pass latest precomputed highlight so it immediately locks and renders after chat reply
+  const targetHighlight = latestPredictionData?.highlight;
+  await sendUserMessage("Yes", targetHighlight);
+}
+
+function collapseToCircleOrb() {
+  isExpanded = false;
+  console.log('[Mode] Collapsing to Circle Orb');
+
+  stopTaskTracking(true);
+  document.body.classList.remove('mode-expanded');
+  document.body.classList.add('mode-collapsed');
+  window.electronAPI?.setWindowMode?.('collapsed');
+}
+
 // Window Controls
-document.getElementById('minimize-btn')?.addEventListener('click', () => {
-  window.electronAPI?.minimizeWindow();
+collapseBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  collapseToCircleOrb();
 });
 
-document.getElementById('close-btn')?.addEventListener('click', () => {
+closeBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  window.electronAPI?.hideHighlight?.();
   window.electronAPI?.closeWindow();
 });
 
@@ -311,49 +377,58 @@ async function sendUserMessage(text, precomputedHighlight = null) {
     const isAffirmative = /\b(yes|yeah|sure|yep|ok|okay|please|show|point|where|help|guide|how|tell me|do it|continue|go ahead|y)\b/i.test(userText);
     const isNegative = /\b(no|nope|nah|don't|dont|not now|cancel|stop|i'm good|im good|never mind|dismiss|n)\b/i.test(userText);
 
-    // 1. Capture screen
-    console.log('[Step 1] Capturing desktop frame...');
+    // 1. Capture fresh screen snapshot right now
+    console.log('[Step 1] Capturing fresh desktop frame on user message...');
     const screenshot = await window.electronAPI?.captureScreen?.();
     const memory = await window.electronAPI?.getMemory?.();
 
-    // 2. Deep Vision & Spatial Analysis
-    console.log('[Step 2] Querying Gemini Vision for detailed spatial intelligence...');
+    // 2. Query Gemini Vision to inspect screen and evaluate if goal changed
+    console.log('[Step 2] Querying Gemini Vision for spatial intelligence & goal check...');
+    const currentGoal = activeTask?.workflowGoal || "";
     const analysis = await apiRequest('/api/predict', {
       screenshot_base64: screenshot,
-      memoryProfile: memory?.profile || ''
+      memoryProfile: memory?.profile || '',
+      userMessage: userText,
+      currentWorkflowGoal: currentGoal
     }).catch(() => null);
 
     latestPredictionData = analysis;
     const screenDesc = analysis?.screenContext || analysis?.prediction || "Current Screen";
     const spatialDesc = analysis?.spatialContext || "";
     const highlightTarget = precomputedHighlight || analysis?.highlight || latestPredictionData?.highlight;
+    const workflowGoal = analysis?.workflowGoal || highlightTarget?.label || "Desktop Task";
     console.log(`[Step 3] Visual Context: "${screenDesc}"`);
     console.log(`[Step 3b] Spatial Layout: "${spatialDesc}"`);
+    console.log(`[Step 3c] Workflow Goal: "${workflowGoal}"`);
 
-    // 3. Handle highlights & prediction pause based on intent
-    if (isNegative) {
-      console.log('[User Response: Negative] User declined. Pausing predictions for 90s.');
-      activeTask = null;
-      if (taskVerificationInterval) {
-        clearInterval(taskVerificationInterval);
-        taskVerificationInterval = null;
-      }
-      window.electronAPI?.hideHighlight?.();
-      window.electronAPI?.pausePredictions?.(90000);
-    } else if ((isAffirmative || /click|where|show|point/i.test(userText)) && highlightTarget) {
-      console.log('[User Response: Affirmative] Triggering desktop highlight overlay at:', highlightTarget);
-      window.electronAPI?.showHighlight?.(highlightTarget);
-      startTaskTracking(highlightTarget, screenshot);
+    // 3. Goal Change / Interruption Detection
+    const isGoalDifferent = activeTask && (
+      analysis?.isGoalSwitched ||
+      (workflowGoal && currentGoal && workflowGoal.toLowerCase() !== currentGoal.toLowerCase() && !isAffirmative)
+    );
+
+    if (isGoalDifferent) {
+      console.log(`[Workflow Interrupted] Detected goal change from "${currentGoal}" -> "${workflowGoal}". Resetting previous task.`);
+      stopTaskTracking();
     }
 
-    // 4. Compile message for Perxona Chatbot with full spatial intelligence
+    // 4. Handle user negative intent dismissal
+    if (isNegative) {
+      console.log('[User Response: Negative] User declined. Pausing predictions for 90s.');
+      stopTaskTracking();
+      window.electronAPI?.pausePredictions?.(90000);
+    }
+
+    // 5. Compile message for Perxona Chatbot with full spatial intelligence
     let intentGuidance = "";
-    if (isAffirmative) {
+    if (isGoalDifferent) {
+      intentGuidance = `User switched to a new goal: "${workflowGoal}" with query: "${userText}". Spatially guide them to the new target (${highlightTarget?.label || 'target'}) to start this new task.`;
+    } else if (isAffirmative) {
       intentGuidance = `User confirmed assistance with "${userText}". Spatially guide them step-by-step to the highlighted target element (${highlightTarget?.label || 'target button'}). Give clear directions (e.g. "Look at the top-right button...").`;
     } else if (isNegative) {
       intentGuidance = `User declined assistance with "${userText}". Politely acknowledge in 1 brief, friendly sentence.`;
     } else {
-      intentGuidance = `User asked: "${userText}". Provide clear, helpful, spatially-aware guidance for this screen.`;
+      intentGuidance = `User asked: "${userText}". Provide clear, helpful, spatially-aware guidance for this screen. Direct them to the highlighted element (${highlightTarget?.label || 'target'}) if relevant.`;
     }
 
     const compiledUserPrompt = `[Spatial Screen Intelligence: ${screenDesc}. Spatial Layout: ${spatialDesc}. Target Element: ${JSON.stringify(highlightTarget || 'None')}] ${intentGuidance}`;
@@ -372,7 +447,14 @@ async function sendUserMessage(text, precomputedHighlight = null) {
     showBubble('NavGuide', replySpeech, 20000);
     history.push({ role: 'assistant', text: replySpeech });
 
-    // 6. Speak Perxona response (voice + lip-sync + motion markup)
+    // 6. ONLY AFTER CHAT RESPONDS: Trigger the highlight overlay and start tracking
+    if (!isNegative && highlightTarget) {
+      console.log('[Step 6: Post-Chat Response] Triggering desktop highlight overlay at:', highlightTarget);
+      window.electronAPI?.showHighlight?.(highlightTarget);
+      startTaskTracking(highlightTarget, screenshot, workflowGoal);
+    }
+
+    // 7. Speak Perxona response (voice + lip-sync + motion markup)
     console.log('[Step 7] Triggering avatar speech...');
     await speakWithAvatar(replySpeech);
 
@@ -393,88 +475,199 @@ async function sendUserMessage(text, precomputedHighlight = null) {
   }
 }
 
-// ── Active Task Completion & Supportive Coaching Loop ──────────────────────
+// ── Single-Threaded Mutex Task Completion & Multi-Step Support Loop ────────
 
+let currentWorkflowSessionId = 0;
 let activeTask = null;
-let taskVerificationInterval = null;
+let taskVerificationTimeout = null;
+let isVerificationRunning = false;
 
-function startTaskTracking(target, initialScreenshot = null) {
+function stopTaskTracking(hideOverlay = true) {
+  currentWorkflowSessionId++;
+  if (taskVerificationTimeout) {
+    clearTimeout(taskVerificationTimeout);
+    taskVerificationTimeout = null;
+  }
+  isVerificationRunning = false;
+  activeTask = null;
+  if (hideOverlay) {
+    window.electronAPI?.hideHighlight?.();
+  }
+}
+
+function startTaskTracking(target, initialScreenshot = null, workflowGoal = "") {
   if (!target) return;
+
+  // Invalidate any existing verification cycles WITHOUT prematurely hiding the highlight we are about to display
+  stopTaskTracking(false);
+
+  // Directly show the highlight
+  console.log('[Highlight] Triggering highlight overlay on desktop for:', target);
+  window.electronAPI?.showHighlight?.(target);
+
+  const sessionId = currentWorkflowSessionId;
+  const goal = workflowGoal || latestPredictionData?.workflowGoal || target.label || 'Workflow';
+
   activeTask = {
     label: target.label || 'Target Element',
     box_2d: target.box_2d,
+    workflowGoal: goal,
     previousScreenshot: initialScreenshot,
     startedAt: Date.now(),
     lastSupportAt: Date.now(),
     supportCount: 0
   };
 
-  if (taskVerificationInterval) clearInterval(taskVerificationInterval);
-  taskVerificationInterval = setInterval(async () => {
-    if (!activeTask) {
-      clearInterval(taskVerificationInterval);
-      taskVerificationInterval = null;
+  console.log(`[Task Session #${sessionId}] Started single-threaded tracking for goal: "${goal}" on "${activeTask.label}"`);
+
+  function scheduleNextCheck(delayMs = 3500) {
+    if (sessionId !== currentWorkflowSessionId || !activeTask) return;
+    if (taskVerificationTimeout) clearTimeout(taskVerificationTimeout);
+    taskVerificationTimeout = setTimeout(async () => {
+      await runVerificationCycle(sessionId);
+    }, delayMs);
+  }
+
+  async function runVerificationCycle(cycleSessionId) {
+    // Guard against stale asynchronous executions or overlapping runs
+    if (cycleSessionId !== currentWorkflowSessionId || !activeTask || isVerificationRunning) {
       return;
     }
+    isVerificationRunning = true;
 
     try {
       const currentScreenshot = await window.electronAPI?.captureScreen?.();
-      if (!currentScreenshot || !activeTask) return;
+      if (cycleSessionId !== currentWorkflowSessionId || !activeTask || !currentScreenshot) {
+        return;
+      }
 
       const elapsedSeconds = Math.round((Date.now() - activeTask.startedAt) / 1000);
       const res = await apiRequest('/api/verify-task', {
         screenshot_base64: currentScreenshot,
         previous_screenshot_base64: activeTask.previousScreenshot,
         activeTask,
+        workflowGoal: activeTask.workflowGoal,
         elapsedSeconds,
         supportCount: activeTask.supportCount
       }).catch(() => null);
 
-      if (res?.visualDiff) {
+      if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+
+      if (res?.visualDiff && res.visualDiff.trim()) {
         console.log(`[Visual Difference] ${res.visualDiff}`);
+        showToast('Analyzing screen...', 2000);
       }
 
       if (res?.isCompleted && activeTask) {
-        console.log(`[Task Verification] Success! User completed action on "${activeTask.label}". Auto-dismissing highlight.`);
-        window.electronAPI?.hideHighlight?.();
         const completedTaskLabel = activeTask.label;
-        activeTask = null;
-        if (taskVerificationInterval) {
-          clearInterval(taskVerificationInterval);
-          taskVerificationInterval = null;
+        const currentGoal = activeTask.workflowGoal;
+
+        // Dismiss previous highlight immediately
+        window.electronAPI?.hideHighlight?.();
+
+        // Check if there is a subsequent step in this multi-step flow
+        if (!res.isFlowFinished) {
+          showToast('Analyzing new screen...', 3000);
+          console.log(`[Multi-Step Progression] Step "${completedTaskLabel}" completed. Capturing fresh photo of the new screen state...`);
+
+          // Allow 400ms for destination page DOM/layout to render
+          await new Promise((r) => setTimeout(r, 400));
+          if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+
+          // 1. Take a fresh screenshot of the brand new screen
+          const freshScreen = await window.electronAPI?.captureScreen?.();
+          if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+
+          // 2. Feed the new screenshot directly into vision engine with the active workflow goal
+          console.log(`[Multi-Step Vision] Feeding fresh screenshot to API for goal: "${currentGoal}"...`);
+          const nextAnalysis = await apiRequest('/api/predict', {
+            screenshot_base64: freshScreen,
+            currentWorkflowGoal: currentGoal,
+            userMessage: `User completed: "${completedTaskLabel}". Analyze the new screen to find the next action for workflow: "${currentGoal}".`
+          }).catch(() => null);
+
+          if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+
+          const nextHighlight = nextAnalysis?.highlight || res.nextHighlight;
+
+          if (nextHighlight) {
+            console.log(`[Next Step Grounding] Publishing single locked highlight at:`, nextHighlight);
+            window.electronAPI?.showHighlight?.(nextHighlight);
+            activeTask = {
+              label: nextHighlight.label || res.nextStep || 'Next Action',
+              box_2d: nextHighlight.box_2d,
+              workflowGoal: currentGoal,
+              previousScreenshot: freshScreen,
+              startedAt: Date.now(),
+              lastSupportAt: Date.now(),
+              supportCount: 0
+            };
+
+            const nextPrompt = `[Multi-Step Continuation towards "${currentGoal}": User completed "${completedTaskLabel}". New screen loaded. Next action: "${nextAnalysis?.prediction || res.nextStep || ''}" on "${nextHighlight.label}"] Spatially guide them to click the newly highlighted element in 1-2 clear, enthusiastic sentences without asking if they need help!`;
+            history.push({ role: 'user', text: nextPrompt });
+            const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
+              messages: toConnectMessages(history.slice(-MAX_HISTORY))
+            });
+
+            if (cycleSessionId !== currentWorkflowSessionId || !activeTask) return;
+
+            const reply = chatRes?.reply_text || nextAnalysis?.prediction || res.nextStep || `Great! Now click ${nextHighlight.label}.`;
+            showBubble('NavGuide', reply, 20000);
+            history.push({ role: 'assistant', text: reply });
+            await speakWithAvatar(reply);
+
+            // Resume checking for subsequent step ONLY after instructions finish
+            scheduleNextCheck(4000);
+            return;
+          }
         }
 
-        // Chime in with celebration & next step
-        const confirmPrompt = `[Task Success: User just successfully completed action on "${completedTaskLabel}". Next: "${res.nextStep || ''}"] Acknowledge their progress enthusiastically in 1 brief friendly sentence!`;
+        // Full workflow completed
+        showToast('Workflow completed!', 3000);
+        console.log(`[Task Verification] Full workflow completed on "${completedTaskLabel}". Dismissing highlight.`);
+        stopTaskTracking();
+
+        // Chime in with celebration text message and avatar speech
+        const confirmPrompt = `[Workflow Completed: User successfully finished the entire process for "${currentGoal}".] Congratulate them enthusiastically on finishing this workflow in 1-2 warm, friendly sentences!`;
         history.push({ role: 'user', text: confirmPrompt });
         const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
           messages: toConnectMessages(history.slice(-MAX_HISTORY))
         });
-        const reply = chatRes?.reply_text || `Great job! You completed that step.`;
-        showBubble('NavGuide', reply, 12000);
+        const reply = chatRes?.reply_text || `Great job! You've successfully finished this task.`;
+        showBubble('NavGuide', reply, 16000);
         history.push({ role: 'assistant', text: reply });
         await speakWithAvatar(reply);
+        return;
       } else if (res?.isStuck && res?.supportAdvice && activeTask && (Date.now() - activeTask.lastSupportAt > 14000)) {
         activeTask.lastSupportAt = Date.now();
         activeTask.supportCount++;
-        activeTask.previousScreenshot = currentScreenshot; // Update snapshot to latest step
+        activeTask.previousScreenshot = currentScreenshot;
         console.log(`[Continuous Task Support #${activeTask.supportCount}] Offering coaching on "${activeTask.label}": ${res.supportAdvice}`);
 
-        // Provide proactive assistive support without stopping
-        const helpPrompt = `[Continuous Supportive Coaching #${activeTask.supportCount}: User is still working on "${activeTask.label}". Context Diff: "${res.visualDiff || ''}". Helpful Hint: "${res.supportAdvice}"] Chime in with 1 warm, supportive sentence offering this helpful hint to guide them!`;
+        const helpPrompt = `[Continuous Supportive Coaching #${activeTask.supportCount}: User is still working on "${activeTask.label}" for "${activeTask.workflowGoal}". Context Diff: "${res.visualDiff || ''}". Helpful Hint: "${res.supportAdvice}"] Chime in with 1 warm, supportive sentence offering this helpful hint to guide them!`;
         history.push({ role: 'user', text: helpPrompt });
         const chatRes = await apiRequest(`/api/chatbots/${config.chatbotId}/chat`, {
           messages: toConnectMessages(history.slice(-MAX_HISTORY))
         });
-        const reply = chatRes?.reply_text || res.supportAdvice;
-        showBubble('NavGuide', reply, 16000);
-        history.push({ role: 'assistant', text: reply });
-        await speakWithAvatar(reply);
+        if (cycleSessionId === currentWorkflowSessionId && activeTask) {
+          const reply = chatRes?.reply_text || res.supportAdvice;
+          showBubble('NavGuide', reply, 16000);
+          history.push({ role: 'assistant', text: reply });
+          await speakWithAvatar(reply);
+        }
       }
-    } catch (e) {
-      // Fail silently in background check loop
+    } catch (err) {
+      console.error('[Verification Cycle Error]', err);
+    } finally {
+      isVerificationRunning = false;
+      if (cycleSessionId === currentWorkflowSessionId && activeTask) {
+        scheduleNextCheck(3500);
+      }
     }
-  }, 3500);
+  }
+
+  // Kick off first cycle
+  scheduleNextCheck(3500);
 }
 
 async function compressUserMemory(userText, assistantText) {
@@ -562,8 +755,17 @@ function setupSpeechRecognition() {
 // ── UI Setup ──────────────────────────────────────────────────────────────
 
 function setupUI() {
-  // Avatar click handler for instant prediction
-  avatarStage.addEventListener('click', handleAvatarClick);
+  // Click on proactive prediction bubble or circle orb expands to full avatar companion
+  proactiveBubble?.addEventListener('click', () => {
+    expandToFullAvatar();
+  });
+
+  avatarOrb?.addEventListener('click', () => {
+    expandToFullAvatar();
+  });
+
+  // Avatar click handler for instant prediction inside expanded stage
+  avatarStage?.addEventListener('click', handleAvatarClick);
 
   // Text drawer toggle
   textToggleBtn.addEventListener('click', (e) => {
@@ -590,14 +792,20 @@ function setupUI() {
       sendUserMessage(text);
     }
   });
-  // Proactive background prediction display (natural conversation)
+
+  // Proactive background prediction display
   window.electronAPI?.onProactivePrediction?.(async (predData) => {
     console.log('[Proactive Prediction Received]', predData?.prediction);
     latestPredictionData = predData;
     const predictionText = predData?.prediction || "I notice what you're working on. Would you like me to guide you or point out where to click?";
 
-    console.log('[Proactive Prediction] Displaying in speech bubble...');
-    showBubble('NavGuide', predictionText, 25000);
+    if (!isExpanded) {
+      // Show in circle mode prediction bubble for 15 seconds, then auto-fade and re-evaluate
+      showProactiveBubble(predictionText, 15000);
+    } else {
+      console.log('[Proactive Prediction] Displaying in expanded speech bubble...');
+      showBubble('NavGuide', predictionText, 25000);
+    }
   });
 }
 
@@ -605,5 +813,6 @@ function setupUI() {
 document.addEventListener('DOMContentLoaded', async () => {
   setupUI();
   setupSpeechRecognition();
+  // Keep presenter ready in background
   await initializePresenter();
 });
